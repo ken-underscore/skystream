@@ -7,5 +7,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record PostRecord(
         @JsonProperty("$type") String type,
         String text,
-        String createdAt
+        String createdAt,
+        String[] langs
 ) {}

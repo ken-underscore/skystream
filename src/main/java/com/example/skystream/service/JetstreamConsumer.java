@@ -19,9 +19,11 @@ import tools.jackson.databind.ObjectMapper;
 public class JetstreamConsumer {
     private final WebSocketClient client = new ReactorNettyWebSocketClient();
     private final ObjectMapper objectMapper;
+    private final AggregatorService aggregatorService;
 
-    public JetstreamConsumer(ObjectMapper objectMapper) {
+    public JetstreamConsumer(ObjectMapper objectMapper, AggregatorService aggregatorService) {
         this.objectMapper = objectMapper;
+        this.aggregatorService = aggregatorService;
     }
 
     private static final String COMMIT_TYPE = 
@@ -75,6 +77,8 @@ public class JetstreamConsumer {
 
                         return event;
                     })
+                    .transform(aggregatorService::createWordBuckets)
+                    .doOnNext(bucket -> System.out.println(bucket))
                     .doOnComplete(() ->
                         System.err.println("⚠️ V2 receive stream completed"))
                     .doOnError(error -> {
@@ -92,7 +96,9 @@ public class JetstreamConsumer {
         .subscribe(
             ignored -> {},
             error -> System.err.println("Terminal error: " + error)
-        ); 
+        );
+
+
     }
 
     private JetstreamFrame decodeFrame(String json) {
