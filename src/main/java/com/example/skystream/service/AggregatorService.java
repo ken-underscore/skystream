@@ -24,8 +24,8 @@ public class AggregatorService {
 
     public Flux<Map<String, Integer>> createWordBuckets(Flux<JetstreamCommit> flux) {
         return flux
-            // Delete commits have null records
             .filter(commit -> commit.operation().equals("create"))
+            // Delete commits have null records
             .filter(commit -> commit.record() != null)
             .map(JetstreamCommit::record)
             .filter(record -> {

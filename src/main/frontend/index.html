@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Skystream</title></head>
+<body><main>
+  <header><div><p class="eyebrow">BLUESKY / LIVE CONVERSATION</p><h1>Skystream</h1></div><a id="mode" href="?demo=1">Try demo</a></header>
+  <div class="toolbar"><p id="status" role="status">Connecting…</p><p>30-second snapshots · Top 100 words</p></div>
+  <section id="cloud" aria-label="Word cloud"><svg role="img" aria-labelledby="title"><title id="title">Waiting for a word bucket</title></svg><p id="empty">Waiting for the first bucket…</p></section>
+  <footer><p id="summary" aria-live="polite">Each bucket replaces the previous cloud.</p><p id="updated">No bucket received yet</p></footer>
+  <p id="error" role="alert" hidden></p>
+</main><script type="module" src="/src/main.ts"></script></body>
+</html>

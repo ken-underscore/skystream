@@ -1,7 +1,7 @@
 package com.example.skystream.service;
 
 import java.net.URI;
-import java.util.List;
+import java.util.Map;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -12,7 +12,8 @@ import org.springframework.web.reactive.socket.client.WebSocketClient;
 
 import dto.JetstreamCommit;
 import dto.JetstreamFrame;
-import dto.PostRecord;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 import tools.jackson.databind.ObjectMapper;
 
 @Service 
@@ -26,6 +27,9 @@ public class JetstreamConsumer {
         this.aggregatorService = aggregatorService;
     }
 
+    private final Sinks.Many<Map<String, Integer>> buckets = 
+        Sinks.many().replay().latest();
+
     private static final String COMMIT_TYPE = 
         "network.bsky.jetstream.subscribeEvents#commit";
 
@@ -35,6 +39,10 @@ public class JetstreamConsumer {
         "?kinds=commit&collections=app.bsky.feed.post"
     );
 
+    public Flux<Map<String, Integer>> wordBuckets() {
+        return buckets.asFlux();
+    }
+
     @EventListener(ApplicationReadyEvent.class)
     public void connectToApi() {
 
@@ -43,7 +51,6 @@ public class JetstreamConsumer {
 
             return session.receive()
                     .map(WebSocketMessage::getPayloadAsText)
-                    .doOnNext(json -> System.out.println("RAW: " + json))
                     .map(this::decodeFrame)
                     .map(frame -> {
                         if ("error".equals(frame.type())) {
@@ -78,7 +85,12 @@ public class JetstreamConsumer {
                         return event;
                     })
                     .transform(aggregatorService::createWordBuckets)
-                    .doOnNext(bucket -> System.out.println(bucket))
+                    .doOnNext(bucket -> {
+                        var result = buckets.tryEmitNext(bucket);
+                        if (result.isFailure()) {
+                            System.err.println("Failed bucket: " + result);
+                        }
+                    })
                     .doOnComplete(() ->
                         System.err.println("⚠️ V2 receive stream completed"))
                     .doOnError(error -> {
