@@ -9,6 +9,11 @@ a { color: #a5d8ff; text-underline-offset: 5px; }
 p { margin: 0; }
 .toolbar, footer { color: #93aac0; font-size: 13px; }
 .toolbar { padding: 18px 0; border-top: 1px solid #2a3b50; }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; }
+.controls label { display: flex; align-items: center; gap: 8px; }
+select { font: inherit; color: #dce9f6; background: #142235; border: 1px solid #48627c; border-radius: 6px; padding: 7px 10px; }
+select:focus-visible { outline: 2px solid #79c8ff; outline-offset: 3px; }
+.transition-description { color: #93aac0; font-size: 13px; margin: 0 0 12px; }
 #status::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #f5c985; margin-right: 9px; }
 #status[data-connected='true']::before { background: #a5e3d5; }
 #cloud { position: relative; height: clamp(320px, 65vh, 720px); background: #142235; border: 1px solid #2a3b50; border-radius: 16px; overflow: hidden; }

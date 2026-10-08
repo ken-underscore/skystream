@@ -1,7 +1,11 @@
 import './style.css';
 import { parseBucket } from './bucket';
 import { createCloud } from './cloud';
+import type { CloudTransition } from './cloud';
 import { connectStream } from './stream';
+import { createRefreshScheduler, loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
+import type { WordCount } from './bucket';
+import { loadSnapshotWindow, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -19,24 +23,66 @@ const renderer = createCloud(element('cloud'), (placed, selected) => {
   empty.textContent = selected ? 'No words fit this view.' : 'No words in this bucket.';
   element('summary').textContent = `Showing ${placed} of ${selected} selected words.`;
 });
-const disconnect = connectStream(demo, json => {
-  try {
-    const words = parseBucket(json);
-    renderer.update(words);
-    error.hidden = true;
-    element('updated').textContent = `Received at ${new Date().toLocaleTimeString()}`;
-    element('title').textContent = words.length
-      ? `Latest 30-second snapshot: ${words.length} unique words. Larger words occurred more often.`
-      : 'Latest 30-second snapshot contains no words.';
-  } catch (cause) {
-    error.textContent = `Could not read bucket: ${cause instanceof Error ? cause.message : 'Invalid data'}`;
-    error.hidden = false;
-  }
-}, value => {
-  element('status').textContent = value;
-  element('status').dataset.connected = String(value === 'Connected' || value === 'Demo mode');
+const transitionDescriptions: Record<CloudTransition, string> = {
+  crossfade: 'The old cloud fades out while the new cloud fades in.',
+  move: 'Existing words move and resize; arriving and departing words fade.',
+  fade: 'The old cloud fades away before the new cloud appears.',
+  none: 'Each new cloud appears immediately.',
+};
+const transition = element('transition') as HTMLSelectElement;
+transition.addEventListener('change', () => {
+  const mode = transition.value as CloudTransition;
+  element('transition-description').textContent = transitionDescriptions[mode];
+  renderer.setTransition(mode);
 });
-function cleanup() { disconnect(); renderer.destroy(); }
+const refresh = element('refresh') as HTMLSelectElement;
+refresh.value = String(loadRefreshInterval());
+const snapshot = element('snapshot') as HTMLSelectElement;
+snapshot.replaceChildren(...snapshotWindows.map(window => new Option(window.label, String(window.seconds))));
+snapshot.value = String(loadSnapshotWindow());
+function createScheduler() {
+  const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
+  return createRefreshScheduler(({ words, receivedAt }: { words: WordCount[]; receivedAt: Date }) => {
+    renderer.update(words);
+    element('updated').textContent = `Received at ${receivedAt.toLocaleTimeString()}`;
+    element('title').textContent = words.length
+      ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
+      : `Latest snapshot (${windowLabel}) contains no words.`;
+  }, Number(refresh.value));
+}
+let scheduler = createScheduler();
+refresh.addEventListener('change', () => {
+  const interval = Number(refresh.value);
+  if (!refreshIntervals.includes(interval)) return;
+  saveRefreshInterval(interval);
+  scheduler.setInterval(interval);
+});
+function startStream() {
+  return connectStream(demo, Number(snapshot.value), json => {
+    try {
+      const words = parseBucket(json);
+      scheduler.update({ words, receivedAt: new Date() });
+      error.hidden = true;
+    } catch (cause) {
+      error.textContent = `Could not read bucket: ${cause instanceof Error ? cause.message : 'Invalid data'}`;
+      error.hidden = false;
+    }
+  }, value => {
+    element('status').textContent = value;
+    element('status').dataset.connected = String(value === 'Connected' || value === 'Demo mode');
+  });
+}
+let disconnect = startStream();
+snapshot.addEventListener('change', () => {
+  saveSnapshotWindow(Number(snapshot.value));
+  disconnect();
+  scheduler.destroy();
+  scheduler = createScheduler();
+  error.hidden = true;
+  element('status').textContent = 'Loading snapshot…';
+  disconnect = startStream();
+});
+function cleanup() { disconnect(); scheduler.destroy(); renderer.destroy(); }
 window.addEventListener('pagehide', cleanup, { once: true });
 window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
 if (import.meta.hot) import.meta.hot.dispose(cleanup);

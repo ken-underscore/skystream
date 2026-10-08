@@ -3,9 +3,18 @@
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Skystream</title></head>
 <body><main>
   <header><div><p class="eyebrow">BLUESKY / LIVE CONVERSATION</p><h1>Skystream</h1></div><a id="mode" href="?demo=1">Try demo</a></header>
-  <div class="toolbar"><p id="status" role="status">Connecting…</p><p>30-second snapshots · Top 100 words</p></div>
+  <div class="toolbar">
+    <p id="status" role="status">Connecting…</p>
+    <div class="controls">
+      <p>Top 100 words</p>
+      <label for="snapshot">Snapshot <select id="snapshot"></select></label>
+      <label for="refresh">Refresh <select id="refresh"><option value="0">Every batch</option><option value="5000">5 seconds</option><option value="10000">10 seconds</option><option value="30000">30 seconds</option><option value="60000">60 seconds</option></select></label>
+      <label for="transition">Transition <select id="transition"><option value="crossfade">Crossfade</option><option value="move">Smooth movement</option><option value="fade">Fade out / fade in</option><option value="none">Instant</option></select></label>
+    </div>
+  </div>
+  <p id="transition-description" class="transition-description">The old cloud fades out while the new cloud fades in.</p>
   <section id="cloud" aria-label="Word cloud"><svg role="img" aria-labelledby="title"><title id="title">Waiting for a word bucket</title></svg><p id="empty">Waiting for the first bucket…</p></section>
-  <footer><p id="summary" aria-live="polite">Each bucket replaces the previous cloud.</p><p id="updated">No bucket received yet</p></footer>
+  <footer><p id="summary" aria-live="polite">Waiting for the first snapshot.</p><p id="updated">No bucket received yet</p></footer>
   <p id="error" role="alert" hidden></p>
 </main><script type="module" src="/src/main.ts"></script></body>
 </html>

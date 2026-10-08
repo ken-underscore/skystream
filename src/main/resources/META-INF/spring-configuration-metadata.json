@@ -1,0 +1,11 @@
+{
+  "properties": [
+    {
+      "name": "skystream.jetstream.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether to connect to Jetstream and ingest commits when the application starts.",
+      "defaultValue": true,
+      "sourceType": "com.example.skystream.service.JetstreamConsumer"
+    }
+  ]
+}

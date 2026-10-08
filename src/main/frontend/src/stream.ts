@@ -1,16 +1,31 @@
-export function connectStream(demo: boolean, onBucket: (json: string) => void, onStatus: (status: string) => void): () => void {
+export function connectStream(demo: boolean, windowSeconds: number, onBucket: (json: string) => void, onStatus: (status: string) => void): () => void {
+  let closed = false;
   if (demo) {
     onStatus('Demo mode');
     const words = 'bluesky community music books art science nature coffee games space garden ocean travel movies technology friends photography weather coding cats dogs food sports culture learning design stories morning weekend stars creativity language city forest birds flowers conversation ideas discovery'.split(' ');
-    const send = () => onBucket(JSON.stringify(Object.fromEntries(words.map(word => [word, 1 + Math.floor(Math.random() ** 2 * 100)]))));
+    const bucket = () => Object.fromEntries(words.map(word => [word, 1 + Math.floor(Math.random() ** 2 * 100)]));
+    // Synthetic history lets all six windows work immediately in the demo.
+    const history = Array.from({ length: 3600 / 5 }, bucket);
+    const send = () => {
+      if (closed) return;
+      const counts: Record<string, number> = {};
+      for (const bucket of history.slice(-windowSeconds / 5)) {
+        for (const [word, count] of Object.entries(bucket)) counts[word] = (counts[word] ?? 0) + count;
+      }
+      onBucket(JSON.stringify(counts));
+    };
     send();
-    const timer = window.setInterval(send, 30_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      history.shift();
+      history.push(bucket());
+      send();
+    }, 5_000);
+    return () => { closed = true; window.clearInterval(timer); };
   }
   onStatus('Connecting…');
-  const source = new EventSource('/api/word-buckets');
-  source.onopen = () => onStatus('Connected');
-  source.onerror = () => onStatus('Reconnecting…');
-  source.onmessage = event => onBucket(event.data);
-  return () => source.close();
+  const source = new EventSource(`/api/word-buckets?windowSeconds=${windowSeconds}`);
+  source.onopen = () => { if (!closed) onStatus('Connected'); };
+  source.onerror = () => { if (!closed) onStatus('Reconnecting…'); };
+  source.onmessage = event => { if (!closed) onBucket(event.data); };
+  return () => { closed = true; source.close(); };
 }
