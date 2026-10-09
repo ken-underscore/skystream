@@ -1,4 +1,4 @@
-export function connectStream(demo: boolean, windowSeconds: number, onBucket: (json: string) => void, onStatus: (status: string) => void): () => void {
+export function connectStream(demo: boolean, windowSeconds: number, refreshIntervalMs: number, onBucket: (json: string) => void, onStatus: (status: string) => void): () => void {
   let closed = false;
   if (demo) {
     onStatus('Demo mode');
@@ -18,12 +18,13 @@ export function connectStream(demo: boolean, windowSeconds: number, onBucket: (j
     const timer = window.setInterval(() => {
       history.shift();
       history.push(bucket());
-      send();
+      if (refreshIntervalMs === 0) send();
     }, 5_000);
-    return () => { closed = true; window.clearInterval(timer); };
+    const delivery = refreshIntervalMs > 0 ? window.setInterval(send, refreshIntervalMs) : undefined;
+    return () => { closed = true; window.clearInterval(timer); window.clearInterval(delivery); };
   }
   onStatus('Connecting…');
-  const source = new EventSource(`/api/word-buckets?windowSeconds=${windowSeconds}`);
+  const source = new EventSource(`/api/word-buckets?windowSeconds=${windowSeconds}&refreshIntervalMs=${refreshIntervalMs}`);
   source.onopen = () => { if (!closed) onStatus('Connected'); };
   source.onerror = () => { if (!closed) onStatus('Reconnecting…'); };
   source.onmessage = event => { if (!closed) onBucket(event.data); };

@@ -2,7 +2,6 @@ package com.example.skystream.service;
 
 import java.net.URI;
 import java.time.Duration;
-import java.util.Map;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,7 +22,6 @@ import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.model.ConsumerCheckpoint;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.http.client.WebsocketClientSpec;
 import reactor.util.retry.Retry;
@@ -55,9 +53,6 @@ public class JetstreamConsumer {
                 () -> WebsocketClientSpec.builder().maxFramePayloadLength(1024 * 1024));
     }
 
-    private final Sinks.Many<ConsumerCheckpoint> checkpoints =
-        Sinks.many().replay().latest();
-
     private static final String COMMIT_TYPE = 
         "network.bsky.jetstream.subscribeEvents#commit";
 
@@ -66,10 +61,6 @@ public class JetstreamConsumer {
         "/xrpc/network.bsky.jetstream.subscribeEvents" +
         "?kinds=commit&collections=app.bsky.feed.post"
     );
-
-    public Flux<Map<String, Long>> wordBuckets(int windowSeconds) {
-        return snapshotService.createSnapshots(checkpoints.asFlux(), Duration.ofSeconds(windowSeconds));
-    }
 
     @EventListener(ApplicationReadyEvent.class)
     public void connectToApi() {
@@ -136,10 +127,6 @@ public class JetstreamConsumer {
     private Mono<Void> consumeCommits(Flux<JetstreamCommit> commits, ConsumerCheckpoint checkpoint) {
         return aggregatorService.createWordBuckets(commits, checkpoint)
                 .transform(snapshotService::persistBatches)
-                .doOnNext(checkpointAfterCommit -> {
-                    var result = checkpoints.tryEmitNext(checkpointAfterCommit);
-                    if (result.isFailure()) throw new IllegalStateException("Failed to publish checkpoint: " + result);
-                })
                 .then();
     }
 
@@ -147,7 +134,6 @@ public class JetstreamConsumer {
     @EventListener(ContextClosedEvent.class)
     public void disconnect() {
         if (connection != null) connection.dispose();
-        checkpoints.tryEmitComplete();
     }
 
     private JetstreamFrame decodeFrame(String json) {

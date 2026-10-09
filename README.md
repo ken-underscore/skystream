@@ -1,6 +1,6 @@
 # Skystream
 
-Jetstream post commits become canonical five-second word-count buckets in PostgreSQL. The accumulator flushes when an event enters a newer bucket. After every committed flush, Java sends each SSE subscriber combined counts for their selected duration: 30 seconds (default), 1 minute, 5 minutes, 10 minutes, 30 minutes, or 1 hour. Each browser independently saves its snapshot duration and refresh preference.
+Jetstream post commits become canonical five-second word-count buckets in PostgreSQL. The accumulator flushes when an event enters a newer bucket. After committed flushes, one PostgreSQL filtered-aggregate query refreshes a shared in-memory cache containing six durations: 30 seconds (default), 1 minute, 5 minutes, 10 minutes, 30 minutes, and 1 hour. SSE delivers the selected cached window at each visitor's refresh rate. Each browser independently saves both preferences.
 
 ## Run locally
 
@@ -30,11 +30,11 @@ pnpm install
 pnpm dev
 ```
 
-Open Vite's printed URL without `?demo=1`. During continuous live traffic, expect a snapshot roughly every five seconds, showing the preceding selected duration. Publication is driven by stream progress, so gaps and catch-up replay can change the wall-clock cadence. The **Refresh** selector controls how often the browser displays received snapshots; **Snapshot** controls how much history they contain.
+Open Vite's printed URL without `?demo=1`. With **Every batch**, expect a snapshot roughly every five seconds during continuous live traffic. Publication is driven by stream progress, so gaps and catch-up replay can change the wall-clock cadence. Timed **Refresh** settings control server delivery every 5, 10, 30, or 60 seconds; **Snapshot** controls how much history each result contains.
 
 ```sh
 curl -N http://localhost:8080/api/word-buckets
-curl -N 'http://localhost:8080/api/word-buckets?windowSeconds=3600'
+curl -N 'http://localhost:8080/api/word-buckets?windowSeconds=3600&refreshIntervalMs=30000'
 ./mvnw test
 ```
 
@@ -59,7 +59,9 @@ The singleton `consumer_checkpoint` stores the latest persisted sequence, greate
 
 Persistence is sequential with no prefetch. Transient database errors get up to three retries with backoff. The repository returns its result only after the transaction commits.
 
-`WordSnapshotService` publishes committed checkpoint progress after every successful flush. Each SSE subscription queries `[maxBucketStart - selected duration, maxBucketStart)`, excluding the partially observed current bucket even though its initial contributions are already saved. Gaps without rows naturally contribute zero; they do not create additional flushes. Corrections to older buckets appear in the next snapshot if their timestamps remain within that snapshot's range; already published snapshots are not individually revised. If the database contains less history than requested, the snapshot includes the available buckets without waiting for a full window.
+After persistence commits, `WordSnapshotService` notifies a separate cache worker. `WordBucketRepository.snapshotCounts` reads the preceding hour in one SQL statement and uses `SUM(count) FILTER (WHERE ...)` to calculate the shorter windows. Each range is `[maxBucketStart - duration, maxBucketStart)`, excluding the partially observed current bucket even though its initial contributions are already saved. Gaps without rows naturally contribute zero. Corrections to older buckets appear in refreshed windows that still contain them. Less available history produces a partial window; empty windows are empty maps.
+
+The worker publishes all six immutable word maps together only after the whole query succeeds. While it runs, visitors use the previous cached set. Transient query failures receive up to three retries; failed refreshes are logged and preserve the previous cache while ingestion continues. The next committed batch triggers another attempt. Query work is sequential and keeps recent pending progress when it falls behind, so it does not build an unbounded backlog during catch-up. The cache starts empty on each application startup and is populated after a committed batch; existing database history is not loaded into it during startup.
 
 ## Reconnects
 
@@ -69,7 +71,9 @@ The WebSocket client accepts frame payloads up to 1 MiB, allowing Jetstream even
 
 A new database has sequence zero and starts at the live tip. Resume depends on the server retaining the requested history; archive backfill for cursors outside the WebSocket lookback is not implemented. Do not change upstream instances or run multiple ingestion processes against the same checkpoint. There is one checkpoint for the current fixed filters and aggregation rules; changing those rules does not rebuild older counts. Retention cleanup is not implemented.
 
-The latest committed checkpoint stays in a shared replay sink for browser subscribers. Each subscriber queries counts for its own window; browsers never create an upstream Jetstream connection, and ingestion continues without subscribers. If a subscriber's query falls behind, it keeps only the newest pending checkpoint instead of queuing outdated windows. Snapshot query failures affect that subscriber's stream rather than ingestion. `GET /api/word-buckets?windowSeconds=30` accepts exactly `30`, `60`, `300`, `600`, `1800`, or `3600`; omitting the parameter defaults to `30`, and invalid values return HTTP 400. Changing the selection reconnects SSE and immediately queries the latest published checkpoint. Before the first flush after application startup, subscribers wait for committed progress. SSE data remains a JSON word/count map, e.g. `{"hello":12,"world":7}`. Counts are 64-bit sums. The upstream connection and downstream streams are stopped on application shutdown.
+The latest complete cache set stays in a shared replay sink. SSE connections and their timers read it without database queries. Browsers never create an upstream Jetstream connection, and cache refreshes continue without subscribers. `GET /api/word-buckets` accepts `windowSeconds` (`30`, `60`, `300`, `600`, `1800`, `3600`; default `30`) and `refreshIntervalMs` (`0`, `5000`, `10000`, `30000`, `60000`; default `0`). Invalid values return HTTP 400. Zero means delivery on each cache refresh; positive intervals send the current cached result on a per-connection timer, including unchanged results when no refresh has succeeded since the previous tick.
+
+The first available cached snapshot is sent immediately on each connection, including after changing either setting. A connection made before the first successful cache refresh waits for that result. Subsequent timed deliveries begin one selected interval later. SSE data remains a JSON word/count map, e.g. `{"hello":12,"world":7}`. Counts are 64-bit sums. The upstream connection, cache worker, and downstream streams/timers stop on application shutdown.
 
 Spring Boot initializes `schema.sql` before the repository is used. Repeated startups preserve existing counts and checkpoint progress.
 

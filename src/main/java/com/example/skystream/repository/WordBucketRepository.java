@@ -5,6 +5,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.r2dbc.core.DatabaseClient;
@@ -116,5 +117,46 @@ public class WordBucketRepository {
                 .bind("start", start.atOffset(ZoneOffset.UTC)).bind("end", end.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> Map.entry(row.get("word", String.class), row.get("total", Long.class)))
                 .all().collectMap(Map.Entry::getKey, Map.Entry::getValue);
+    }
+
+    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. */
+    public Mono<Map<Integer, Map<String, Long>>> snapshotCounts(Instant end) {
+        int[] windows = {30, 60, 300, 600, 1800, 3600};
+        return database.sql("""
+                SELECT word,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :start30)::BIGINT AS seconds_30,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :start60)::BIGINT AS seconds_60,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :start300)::BIGINT AS seconds_300,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :start600)::BIGINT AS seconds_600,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :start1800)::BIGINT AS seconds_1800,
+                    SUM(count)::BIGINT AS seconds_3600
+                FROM bucket_word
+                WHERE bucket_started_at >= :start3600 AND bucket_started_at < :end
+                GROUP BY word
+                """)
+                .bind("end", end.atOffset(ZoneOffset.UTC))
+                .bind("start30", end.minusSeconds(30).atOffset(ZoneOffset.UTC))
+                .bind("start60", end.minusSeconds(60).atOffset(ZoneOffset.UTC))
+                .bind("start300", end.minusSeconds(300).atOffset(ZoneOffset.UTC))
+                .bind("start600", end.minusSeconds(600).atOffset(ZoneOffset.UTC))
+                .bind("start1800", end.minusSeconds(1800).atOffset(ZoneOffset.UTC))
+                .bind("start3600", end.minusSeconds(3600).atOffset(ZoneOffset.UTC))
+                .map((row, metadata) -> {
+                    Map<Integer, Long> totals = new HashMap<>();
+                    for (int seconds : windows) {
+                        Long count = row.get("seconds_" + seconds, Long.class);
+                        if (count != null) totals.put(seconds, count);
+                    }
+                    return Map.entry(row.get("word", String.class), totals);
+                })
+                .all().collect(() -> {
+                    Map<Integer, Map<String, Long>> counts = new HashMap<>();
+                    for (int seconds : windows) counts.put(seconds, new HashMap<>());
+                    return counts;
+                }, (counts, word) -> word.getValue().forEach((seconds, count) -> counts.get(seconds).put(word.getKey(), count)))
+                .map(counts -> {
+                    counts.replaceAll((seconds, words) -> Map.copyOf(words));
+                    return Map.copyOf(counts);
+                });
     }
 }
