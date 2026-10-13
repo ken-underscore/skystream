@@ -186,11 +186,10 @@ class WordBucketDatabaseTests {
 
     @Test
     void filteredAggregatesReturnEmptyWindowsAndReflectCorrectionsToOlderBuckets() {
-        var empty = repository.snapshotCounts(origin).block(timeout);
-        assertEquals(Set.copyOf(WordBucketRepository.SNAPSHOT_WINDOW_SECONDS), empty.keySet());
-        assertTrue(empty.values().stream().allMatch(Map::isEmpty));
+        assertEquals(Map.of(), repository.snapshotCounts(origin).block(timeout));
         repository.saveBatch(batch(0, 10, 5, bucket(0, Map.of("hello", 3)))).block(timeout);
         var first = repository.snapshotCounts(origin.plusSeconds(5)).block(timeout);
+        assertEquals(Set.copyOf(WordBucketRepository.SNAPSHOT_WINDOW_SECONDS), first.keySet());
         assertTrue(first.values().stream().allMatch(words -> words.equals(Map.of("hello", 3L))));
         repository.saveBatch(batch(10, 12, 10, bucket(0, Map.of("hello", 2, "late", 1)))).block(timeout);
         var corrected = repository.snapshotCounts(origin.plusSeconds(10)).block(timeout);

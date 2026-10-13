@@ -64,7 +64,7 @@ public class WordSnapshotService {
                     .distinctUntilChanged(windows -> windows, (a, b) -> a == b);
         }
         // A slow client keeps only the newest pending result, rather than pinning every refresh.
-        return updates.onBackpressureLatest().map(windows -> windows.get(windowSeconds));
+        return updates.onBackpressureLatest().map(windows -> windows.getOrDefault(windowSeconds, Map.of()));
     }
 
     @PreDestroy

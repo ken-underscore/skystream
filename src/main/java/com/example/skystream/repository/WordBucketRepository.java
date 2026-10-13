@@ -3,9 +3,10 @@ package com.example.skystream.repository;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
+import java.util.stream.Collectors;
 
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.r2dbc.core.DatabaseClient;
@@ -26,6 +27,8 @@ import reactor.core.publisher.Mono;
 public class WordBucketRepository {
     /** Snapshot durations, in seconds, that {@link #snapshotCounts} calculates. */
     public static final List<Integer> SNAPSHOT_WINDOW_SECONDS = List.of(30, 60, 300, 600, 1800, 3600);
+
+    private record WindowCount(int seconds, String word, long count) {}
 
     private final DatabaseClient database;
     private final TransactionalOperator transactions;
@@ -122,7 +125,7 @@ public class WordBucketRepository {
                 .all().collectMap(Map.Entry::getKey, Map.Entry::getValue);
     }
 
-    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. */
+    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Windows without words are omitted. */
     public Mono<Map<Integer, Map<String, Long>>> snapshotCounts(Instant end) {
         // Columns must match SNAPSHOT_WINDOW_SECONDS.
         return database.sql("""
@@ -139,21 +142,17 @@ public class WordBucketRepository {
                 """)
                 .bind("end", end.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> {
-                    Map<Integer, Long> totals = new HashMap<>();
+                    String word = row.get("word", String.class);
+                    var counts = new ArrayList<WindowCount>();
                     for (int seconds : SNAPSHOT_WINDOW_SECONDS) {
                         Long count = row.get("seconds_" + seconds, Long.class);
-                        if (count != null) totals.put(seconds, count);
+                        if (count != null) counts.add(new WindowCount(seconds, word, count));
                     }
-                    return Map.entry(row.get("word", String.class), totals);
-                })
-                .all().collect(() -> {
-                    Map<Integer, Map<String, Long>> counts = new HashMap<>();
-                    for (int seconds : SNAPSHOT_WINDOW_SECONDS) counts.put(seconds, new HashMap<>());
                     return counts;
-                }, (counts, word) -> word.getValue().forEach((seconds, count) -> counts.get(seconds).put(word.getKey(), count)))
-                .map(counts -> {
-                    counts.replaceAll((seconds, words) -> Map.copyOf(words));
-                    return Map.copyOf(counts);
-                });
+                })
+                .all()
+                .flatMapIterable(counts -> counts)
+                .collect(Collectors.groupingBy(WindowCount::seconds,
+                        Collectors.toUnmodifiableMap(WindowCount::word, WindowCount::count)));
     }
 }
