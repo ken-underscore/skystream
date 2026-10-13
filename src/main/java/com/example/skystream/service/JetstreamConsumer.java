@@ -5,7 +5,6 @@ import java.time.Duration;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.beans.factory.annotation.Value;
-import jakarta.annotation.PreDestroy;
 import reactor.core.Disposable;
 import org.springframework.context.event.EventListener;
 import org.springframework.context.event.ContextClosedEvent;
@@ -130,7 +129,6 @@ public class JetstreamConsumer {
                 .then();
     }
 
-    @PreDestroy
     @EventListener(ContextClosedEvent.class)
     public void disconnect() {
         if (connection != null) connection.dispose();

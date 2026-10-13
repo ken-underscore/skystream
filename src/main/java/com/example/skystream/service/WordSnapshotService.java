@@ -14,7 +14,6 @@ import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.repository.WordBucketRepository;
 
-import jakarta.annotation.PreDestroy;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -67,10 +66,9 @@ public class WordSnapshotService {
         return updates.onBackpressureLatest().map(windows -> windows.getOrDefault(windowSeconds, Map.of()));
     }
 
-    @PreDestroy
+    // Runs before the web server's graceful shutdown, which waits for open SSE streams to complete.
     @EventListener(ContextClosedEvent.class)
     public void close() {
-        refreshRequests.tryEmitComplete();
         cacheRefresh.dispose();
         cache.tryEmitComplete();
     }
