@@ -3,8 +3,7 @@ import { parseBucket } from './bucket';
 import { createCloud } from './cloud';
 import type { CloudTransition } from './cloud';
 import { connectStream } from './stream';
-import { createRefreshScheduler, loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
-import type { WordCount } from './bucket';
+import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
 import { loadSnapshotWindow, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
 function element(id: string): HTMLElement {
@@ -36,32 +35,25 @@ transition.addEventListener('change', () => {
   renderer.setTransition(mode);
 });
 const refresh = element('refresh') as HTMLSelectElement;
+refresh.replaceChildren(...refreshIntervals.map(interval => new Option(interval.label, String(interval.milliseconds))));
 refresh.value = String(loadRefreshInterval());
 const snapshot = element('snapshot') as HTMLSelectElement;
 snapshot.replaceChildren(...snapshotWindows.map(window => new Option(window.label, String(window.seconds))));
 snapshot.value = String(loadSnapshotWindow());
-function createScheduler() {
-  const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
-  return createRefreshScheduler(({ words, receivedAt }: { words: WordCount[]; receivedAt: Date }) => {
-    renderer.update(words);
-    element('updated').textContent = `Received at ${receivedAt.toLocaleTimeString()}`;
-    element('title').textContent = words.length
-      ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
-      : `Latest snapshot (${windowLabel}) contains no words.`;
-  }, Number(refresh.value));
-}
-let scheduler = createScheduler();
 refresh.addEventListener('change', () => {
-  const interval = Number(refresh.value);
-  if (!refreshIntervals.includes(interval)) return;
-  saveRefreshInterval(interval);
-  scheduler.setInterval(interval);
+  saveRefreshInterval(Number(refresh.value));
+  restartStream();
 });
 function startStream() {
-  return connectStream(demo, Number(snapshot.value), json => {
+  const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
+  return connectStream(demo, Number(snapshot.value), Number(refresh.value), json => {
     try {
       const words = parseBucket(json);
-      scheduler.update({ words, receivedAt: new Date() });
+      renderer.update(words);
+      element('updated').textContent = `Received at ${new Date().toLocaleTimeString()}`;
+      element('title').textContent = words.length
+        ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
+        : `Latest snapshot (${windowLabel}) contains no words.`;
       error.hidden = true;
     } catch (cause) {
       error.textContent = `Could not read bucket: ${cause instanceof Error ? cause.message : 'Invalid data'}`;
@@ -73,16 +65,16 @@ function startStream() {
   });
 }
 let disconnect = startStream();
+function restartStream() {
+  disconnect();
+  error.hidden = true;
+  disconnect = startStream();
+}
 snapshot.addEventListener('change', () => {
   saveSnapshotWindow(Number(snapshot.value));
-  disconnect();
-  scheduler.destroy();
-  scheduler = createScheduler();
-  error.hidden = true;
-  element('status').textContent = 'Loading snapshot…';
-  disconnect = startStream();
+  restartStream();
 });
-function cleanup() { disconnect(); scheduler.destroy(); renderer.destroy(); }
+function cleanup() { disconnect(); renderer.destroy(); }
 window.addEventListener('pagehide', cleanup, { once: true });
 window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
 if (import.meta.hot) import.meta.hot.dispose(cleanup);

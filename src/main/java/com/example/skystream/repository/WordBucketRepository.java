@@ -3,8 +3,10 @@ package com.example.skystream.repository;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.r2dbc.core.DatabaseClient;
@@ -23,6 +25,11 @@ import reactor.core.publisher.Mono;
 @Repository
 @DependsOnDatabaseInitialization
 public class WordBucketRepository {
+    /** Snapshot durations, in seconds, that {@link #snapshotCounts} calculates. */
+    public static final List<Integer> SNAPSHOT_WINDOW_SECONDS = List.of(30, 60, 300, 600, 1800, 3600);
+
+    private record WindowCount(int seconds, String word, long count) {}
+
     private final DatabaseClient database;
     private final TransactionalOperator transactions;
 
@@ -106,15 +113,34 @@ public class WordBucketRepository {
                 .fetch().rowsUpdated().then();
     }
 
-    public Mono<Map<String, Long>> combinedCounts(Instant start, Instant end) {
+    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Windows without words are omitted. */
+    public Mono<Map<Integer, Map<String, Long>>> snapshotCounts(Instant end) {
+        // Columns must match SNAPSHOT_WINDOW_SECONDS.
         return database.sql("""
-                SELECT word, SUM(count)::BIGINT AS total
+                SELECT word,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '30 seconds')::BIGINT AS seconds_30,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '60 seconds')::BIGINT AS seconds_60,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '300 seconds')::BIGINT AS seconds_300,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '600 seconds')::BIGINT AS seconds_600,
+                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '1800 seconds')::BIGINT AS seconds_1800,
+                    SUM(count)::BIGINT AS seconds_3600
                 FROM bucket_word
-                WHERE bucket_started_at >= :start AND bucket_started_at < :end
+                WHERE bucket_started_at >= :end - INTERVAL '3600 seconds' AND bucket_started_at < :end
                 GROUP BY word
                 """)
-                .bind("start", start.atOffset(ZoneOffset.UTC)).bind("end", end.atOffset(ZoneOffset.UTC))
-                .map((row, metadata) -> Map.entry(row.get("word", String.class), row.get("total", Long.class)))
-                .all().collectMap(Map.Entry::getKey, Map.Entry::getValue);
+                .bind("end", end.atOffset(ZoneOffset.UTC))
+                .map((row, metadata) -> {
+                    String word = row.get("word", String.class);
+                    var counts = new ArrayList<WindowCount>();
+                    for (int seconds : SNAPSHOT_WINDOW_SECONDS) {
+                        Long count = row.get("seconds_" + seconds, Long.class);
+                        if (count != null) counts.add(new WindowCount(seconds, word, count));
+                    }
+                    return counts;
+                })
+                .all()
+                .flatMapIterable(counts -> counts)
+                .collect(Collectors.groupingBy(WindowCount::seconds,
+                        Collectors.toUnmodifiableMap(WindowCount::word, WindowCount::count)));
     }
 }
