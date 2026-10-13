@@ -33,8 +33,9 @@ public class WordSnapshotService {
     public WordSnapshotService(WordBucketRepository repository) {
         this.repository = repository;
         // Query work runs separately from ingestion. If it falls behind, keep the newest pending checkpoint.
-        cacheRefresh = refreshRequests.asFlux().onBackpressureLatest()
-                .publishOn(Schedulers.parallel(), 1)
+        cacheRefresh = refreshRequests.asFlux()
+                .publishOn(Schedulers.parallel())
+                .onBackpressureLatest()
                 .concatMap(checkpoint -> Mono.defer(() -> repository.snapshotCounts(checkpoint.maxBucketStart()))
                         .retryWhen(databaseRetry())
                         .doOnNext(windows -> cache.tryEmitNext(windows))
@@ -56,14 +57,14 @@ public class WordSnapshotService {
 
     public Flux<Map<String, Long>> wordBuckets(int windowSeconds, int refreshIntervalMs) {
         var updates = cache.asFlux();
-        if (refreshIntervalMs == 0) return updates.map(windows -> windows.get(windowSeconds));
-
-        // Replay the current result immediately, then read the cache on each client-specific timer tick.
-        return updates.next().flatMapMany(initial -> Flux.concat(Mono.just(initial),
-                Flux.interval(Duration.ofMillis(refreshIntervalMs))
-                        .withLatestFrom(updates, (tick, current) -> current)
-                        .takeUntilOther(updates.ignoreElements())))
-                .map(windows -> windows.get(windowSeconds));
+        if (refreshIntervalMs > 0) {
+            // First result immediately, then at most one new result per interval. Each refresh is a new
+            // map, so identity skips the replayed initial result without comparing contents.
+            updates = updates.take(1).concatWith(updates.sample(Duration.ofMillis(refreshIntervalMs)))
+                    .distinctUntilChanged(windows -> windows, (a, b) -> a == b);
+        }
+        // A slow client keeps only the newest pending result, rather than pinning every refresh.
+        return updates.onBackpressureLatest().map(windows -> windows.get(windowSeconds));
     }
 
     @PreDestroy

@@ -83,6 +83,24 @@ class WordSnapshotServiceTests {
     }
 
     @Test
+    void slowVisitorReceivesOnlyTheNewestPendingResult() {
+        successfulSaves();
+        when(repository.snapshotCounts(any())).thenAnswer(invocation -> {
+            Instant end = invocation.getArgument(0);
+            return Mono.just(windows(Duration.between(start, end).getSeconds()));
+        });
+        StepVerifier.create(service.wordBuckets(30, 0), 0)
+                .then(() -> {
+                    for (int i = 0; i < 5; i++) service.persistBatches(Flux.just(batch(i))).blockLast(timeout);
+                    awaitSnapshot(25);
+                })
+                .thenRequest(Long.MAX_VALUE)
+                .expectNext(Map.of("hello", 25L))
+                .expectNoEvent(Duration.ofMillis(100))
+                .thenCancel().verify(timeout);
+    }
+
+    @Test
     void replacesAllWindowsOnlyAfterTheWholeQueryFinishes() {
         successfulSaves();
         var pending = Sinks.<Map<Integer, Map<String, Long>>>one();
@@ -111,6 +129,7 @@ class WordSnapshotServiceTests {
         }
         pending.tryEmitValue(windows(5));
         awaitSnapshot(15);
+        verify(repository, never()).snapshotCounts(start.plusSeconds(10));
         verify(repository, times(3)).saveBatch(any());
     }
 
@@ -156,27 +175,51 @@ class WordSnapshotServiceTests {
         assertEquals(2, attempts.get());
     }
 
-    @Test
-    void firstResultIsImmediateThenTimerRepeatsCacheAndPicksUpUpdates() {
+    // The service is created inside withVirtualTime so its schedulers use virtual time.
+    private final java.util.concurrent.atomic.AtomicReference<WordSnapshotService> timed =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
+    private StepVerifier.FirstStep<Map<String, Long>> verifyEvery30Seconds(long initialRequest) {
         successfulSaves();
         when(repository.snapshotCounts(any())).thenAnswer(invocation -> {
             Instant end = invocation.getArgument(0);
             return Mono.just(windows(Duration.between(start, end).getSeconds()));
         });
-        var timed = new java.util.concurrent.atomic.AtomicReference<WordSnapshotService>();
-        StepVerifier.withVirtualTime(() -> {
+        return StepVerifier.withVirtualTime(() -> {
             timed.set(new WordSnapshotService(repository));
             return timed.get().wordBuckets(30, 30000);
-        })
-                .then(() -> timed.get().persistBatches(Flux.just(batch(0))).subscribe())
+        }, initialRequest);
+    }
+
+    private void persistTimed(int i) {
+        timed.get().persistBatches(Flux.just(batch(i))).subscribe();
+    }
+
+    @Test
+    void firstResultIsImmediateThenOnlyTheNewestChangePerInterval() {
+        verifyEvery30Seconds(Long.MAX_VALUE)
+                .then(() -> persistTimed(0))
                 .thenAwait(Duration.ZERO)
                 .expectNext(Map.of("hello", 5L))
+                // An unchanged cache is not sent again.
+                .expectNoEvent(Duration.ofSeconds(60))
+                .then(() -> { persistTimed(1); persistTimed(2); })
                 .expectNoEvent(Duration.ofMillis(29999))
-                .thenAwait(Duration.ofMillis(1)).expectNext(Map.of("hello", 5L))
-                .then(() -> timed.get().persistBatches(Flux.just(batch(1))).subscribe())
-                .expectNoEvent(Duration.ofMillis(29999))
-                .thenAwait(Duration.ofMillis(1)).expectNext(Map.of("hello", 10L))
+                .thenAwait(Duration.ofMillis(1)).expectNext(Map.of("hello", 15L))
                 .then(() -> timed.get().close())
-                .verifyComplete();
+                .expectComplete().verify(timeout);
+    }
+
+    @Test
+    void slowTimedVisitorDoesNotOverflowAndReceivesTheNewestResult() {
+        verifyEvery30Seconds(1)
+                .then(() -> persistTimed(0))
+                .thenAwait(Duration.ZERO)
+                .expectNext(Map.of("hello", 5L))
+                .then(() -> { persistTimed(1); persistTimed(2); })
+                .thenAwait(Duration.ofSeconds(90))
+                .thenRequest(1).expectNext(Map.of("hello", 15L))
+                .then(() -> timed.get().close())
+                .expectComplete().verify(timeout);
     }
 }

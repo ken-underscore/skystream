@@ -6,7 +6,7 @@ Use **Snapshot** to choose the preceding 30 seconds (default), 1 minute, 5 minut
 
 Use the **Transition** selector to compare crossfade (the default), smooth movement and resizing, fade out / fade in, or instant replacement. Changing the selection previews that style using the current snapshot. Transitions last 650 ms and unfinished animations are interrupted when a newer layout is ready. The first cloud appears immediately, and the browser's reduced-motion preference disables animations. Moving words can overlap briefly while traveling to their final positions.
 
-Use **Refresh** to receive every cache refresh (the **Every batch** default), or receive the server's current cache every 5, 10, 30, or 60 seconds. Each browser remembers its choice locally. Refresh and snapshot duration are independent. Changing either preference reconnects SSE, receives the first available cached result immediately, and then follows the selected interval. Timed delivery can repeat unchanged results. The browser renders received snapshots directly; it has no separate redraw timer.
+Use **Refresh** to receive every cache refresh (the **Every batch** default), or receive the newest cache refresh at most once every 5, 10, 30, or 60 seconds. Each browser remembers its choice locally. Refresh and snapshot duration are independent. Changing either preference reconnects SSE, receives the first available cached result immediately, and then follows the selected interval. Unchanged results are not sent again. The browser renders received snapshots directly; it has no separate redraw timer.
 
 ## Run
 

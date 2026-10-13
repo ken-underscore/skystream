@@ -30,7 +30,7 @@ pnpm install
 pnpm dev
 ```
 
-Open Vite's printed URL without `?demo=1`. With **Every batch**, expect a snapshot roughly every five seconds during continuous live traffic. Publication is driven by stream progress, so gaps and catch-up replay can change the wall-clock cadence. Timed **Refresh** settings control server delivery every 5, 10, 30, or 60 seconds; **Snapshot** controls how much history each result contains.
+Open Vite's printed URL without `?demo=1`. With **Every batch**, expect a snapshot roughly every five seconds during continuous live traffic. Publication is driven by stream progress, so gaps and catch-up replay can change the wall-clock cadence. Timed **Refresh** settings limit server delivery to at most once every 5, 10, 30, or 60 seconds; **Snapshot** controls how much history each result contains.
 
 ```sh
 curl -N http://localhost:8080/api/word-buckets
@@ -71,7 +71,7 @@ The WebSocket client accepts frame payloads up to 1 MiB, allowing Jetstream even
 
 A new database has sequence zero and starts at the live tip. Resume depends on the server retaining the requested history; archive backfill for cursors outside the WebSocket lookback is not implemented. Do not change upstream instances or run multiple ingestion processes against the same checkpoint. There is one checkpoint for the current fixed filters and aggregation rules; changing those rules does not rebuild older counts. Retention cleanup is not implemented.
 
-The latest complete cache set stays in a shared replay sink. SSE connections and their timers read it without database queries. Browsers never create an upstream Jetstream connection, and cache refreshes continue without subscribers. `GET /api/word-buckets` accepts `windowSeconds` (`30`, `60`, `300`, `600`, `1800`, `3600`; default `30`) and `refreshIntervalMs` (`0`, `5000`, `10000`, `30000`, `60000`; default `0`). Invalid values return HTTP 400. Zero means delivery on each cache refresh; positive intervals send the current cached result on a per-connection timer, including unchanged results when no refresh has succeeded since the previous tick.
+The latest complete cache set stays in a shared replay sink. SSE connections and their timers read it without database queries. Browsers never create an upstream Jetstream connection, and cache refreshes continue without subscribers. `GET /api/word-buckets` accepts `windowSeconds` (`30`, `60`, `300`, `600`, `1800`, `3600`; default `30`) and `refreshIntervalMs` (`0`, `5000`, `10000`, `30000`, `60000`; default `0`). Invalid values return HTTP 400. Zero means delivery on each cache refresh; positive intervals send at most one result per interval, and only when the cache has refreshed since the previous delivery. A slow connection keeps only the newest pending result.
 
 The first available cached snapshot is sent immediately on each connection, including after changing either setting. A connection made before the first successful cache refresh waits for that result. Subsequent timed deliveries begin one selected interval later. SSE data remains a JSON word/count map, e.g. `{"hello":12,"world":7}`. Counts are 64-bit sums. The upstream connection, cache worker, and downstream streams/timers stop on application shutdown.
 
