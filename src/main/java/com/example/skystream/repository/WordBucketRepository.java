@@ -113,18 +113,6 @@ public class WordBucketRepository {
                 .fetch().rowsUpdated().then();
     }
 
-    public Mono<Map<String, Long>> combinedCounts(Instant start, Instant end) {
-        return database.sql("""
-                SELECT word, SUM(count)::BIGINT AS total
-                FROM bucket_word
-                WHERE bucket_started_at >= :start AND bucket_started_at < :end
-                GROUP BY word
-                """)
-                .bind("start", start.atOffset(ZoneOffset.UTC)).bind("end", end.atOffset(ZoneOffset.UTC))
-                .map((row, metadata) -> Map.entry(row.get("word", String.class), row.get("total", Long.class)))
-                .all().collectMap(Map.Entry::getKey, Map.Entry::getValue);
-    }
-
     /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Windows without words are omitted. */
     public Mono<Map<Integer, Map<String, Long>>> snapshotCounts(Instant end) {
         // Columns must match SNAPSHOT_WINDOW_SECONDS.
