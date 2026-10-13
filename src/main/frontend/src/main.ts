@@ -41,9 +41,7 @@ const snapshot = element('snapshot') as HTMLSelectElement;
 snapshot.replaceChildren(...snapshotWindows.map(window => new Option(window.label, String(window.seconds))));
 snapshot.value = String(loadSnapshotWindow());
 refresh.addEventListener('change', () => {
-  const interval = Number(refresh.value);
-  if (!refreshIntervals.some(option => option.milliseconds === interval)) return;
-  saveRefreshInterval(interval);
+  saveRefreshInterval(Number(refresh.value));
   restartStream();
 });
 function startStream() {
