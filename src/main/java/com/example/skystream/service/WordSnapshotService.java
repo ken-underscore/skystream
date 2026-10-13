@@ -54,16 +54,16 @@ public class WordSnapshotService {
                 .doOnNext(checkpoint -> refreshRequests.tryEmitNext(checkpoint));
     }
 
-    public Flux<Map<String, Long>> wordBuckets(int windowSeconds, int refreshIntervalMs) {
-        var updates = cache.asFlux();
-        if (refreshIntervalMs > 0) {
+    public Flux<Map<String, Long>> updates(int windowSeconds, Duration refreshInterval) {
+        var results = cache.asFlux();
+        if (!refreshInterval.isZero()) {
             // First result immediately, then at most one new result per interval. Each refresh is a new
             // map, so identity skips the replayed initial result without comparing contents.
-            updates = updates.take(1).concatWith(updates.sample(Duration.ofMillis(refreshIntervalMs)))
+            results = results.take(1).concatWith(results.sample(refreshInterval))
                     .distinctUntilChanged(windows -> windows, (a, b) -> a == b);
         }
         // A slow client keeps only the newest pending result, rather than pinning every refresh.
-        return updates.onBackpressureLatest().map(windows -> windows.getOrDefault(windowSeconds, Map.of()));
+        return results.onBackpressureLatest().map(windows -> windows.getOrDefault(windowSeconds, Map.of()));
     }
 
     // Runs before the web server's graceful shutdown, which waits for open SSE streams to complete.

@@ -2,6 +2,7 @@ package com.example.skystream.controller;
 
 import static com.example.skystream.repository.WordBucketRepository.SNAPSHOT_WINDOW_SECONDS;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +38,6 @@ public class BucketController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "refreshIntervalMs must be one of " + REFRESH_INTERVAL_MS);
         }
-        return snapshots.wordBuckets(windowSeconds, refreshIntervalMs);
+        return snapshots.updates(windowSeconds, Duration.ofMillis(refreshIntervalMs));
     }
 }

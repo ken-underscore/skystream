@@ -76,7 +76,7 @@ class WordBucketDatabaseTests {
     }
 
     private Map<String, Long> awaitSnapshot(Map<String, Long> expected) {
-        return snapshots.wordBuckets(30, 0).filter(expected::equals).next().block(timeout);
+        return snapshots.updates(30, Duration.ZERO).filter(expected::equals).next().block(timeout);
     }
 
     /** Reads stored counts directly, independent of the production snapshot query. */

@@ -51,7 +51,7 @@ class WordSnapshotServiceTests {
     }
 
     private void awaitSnapshot(long value) {
-        assertEquals(Map.of("hello", value), service.wordBuckets(30, 0)
+        assertEquals(Map.of("hello", value), service.updates(30, Duration.ZERO)
                 .filter(Map.of("hello", value)::equals).next().block(timeout));
     }
 
@@ -61,7 +61,7 @@ class WordSnapshotServiceTests {
         when(repository.snapshotCounts(any())).thenReturn(Mono.just(windows(12)));
         Sinks.One<ConsumerCheckpoint> commit = Sinks.one();
         when(repository.saveBatch(batch(0))).thenReturn(commit.asMono());
-        StepVerifier.create(service.wordBuckets(30, 0).take(1))
+        StepVerifier.create(service.updates(30, Duration.ZERO).take(1))
                 .then(() -> {
                     service.persistBatches(Flux.just(batch(0))).subscribe();
                     verify(repository, never()).snapshotCounts(any());
@@ -78,7 +78,7 @@ class WordSnapshotServiceTests {
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(12);
         var visitors = IntStream.range(0, 100)
-                .mapToObj(i -> service.wordBuckets(SNAPSHOT_WINDOW_SECONDS.get(i % SNAPSHOT_WINDOW_SECONDS.size()), 60000).next()).toList();
+                .mapToObj(i -> service.updates(SNAPSHOT_WINDOW_SECONDS.get(i % SNAPSHOT_WINDOW_SECONDS.size()), Duration.ofMinutes(1)).next()).toList();
         StepVerifier.create(Flux.merge(visitors)).expectNextCount(100).verifyComplete();
         verify(repository, times(1)).snapshotCounts(any());
     }
@@ -90,7 +90,7 @@ class WordSnapshotServiceTests {
             Instant end = invocation.getArgument(0);
             return Mono.just(windows(Duration.between(start, end).getSeconds()));
         });
-        StepVerifier.create(service.wordBuckets(30, 0), 0)
+        StepVerifier.create(service.updates(30, Duration.ZERO), 0)
                 .then(() -> {
                     for (int i = 0; i < 5; i++) service.persistBatches(Flux.just(batch(i))).blockLast(timeout);
                     awaitSnapshot(25);
@@ -110,10 +110,10 @@ class WordSnapshotServiceTests {
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(1);
         service.persistBatches(Flux.just(batch(1))).blockLast(timeout);
-        assertEquals(Map.of("hello", 1L), service.wordBuckets(3600, 0).next().block(timeout));
+        assertEquals(Map.of("hello", 1L), service.updates(3600, Duration.ZERO).next().block(timeout));
         pending.tryEmitValue(windows(2));
         awaitSnapshot(2);
-        assertEquals(Map.of("hello", 2L), service.wordBuckets(3600, 0).next().block(timeout));
+        assertEquals(Map.of("hello", 2L), service.updates(3600, Duration.ZERO).next().block(timeout));
     }
 
     @Test
@@ -188,7 +188,7 @@ class WordSnapshotServiceTests {
         });
         return StepVerifier.withVirtualTime(() -> {
             timed.set(new WordSnapshotService(repository));
-            return timed.get().wordBuckets(30, 30000);
+            return timed.get().updates(30, Duration.ofSeconds(30));
         }, initialRequest);
     }
 
