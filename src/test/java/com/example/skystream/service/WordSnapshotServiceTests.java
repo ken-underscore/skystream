@@ -9,6 +9,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.AfterEach;
@@ -40,7 +43,7 @@ class WordSnapshotServiceTests {
 
     private Map<Integer, Map<String, Long>> windows(long value) {
         return SNAPSHOT_WINDOW_SECONDS.stream()
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(seconds -> seconds, seconds -> Map.of("hello", value)));
+                .collect(Collectors.toUnmodifiableMap(seconds -> seconds, seconds -> Map.of("hello", value)));
     }
 
     private void successfulSaves() {
@@ -164,7 +167,7 @@ class WordSnapshotServiceTests {
 
     @Test
     void retriesTransientWriteFailureAndRefreshesAfterCommit() {
-        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var attempts = new AtomicInteger();
         when(repository.saveBatch(any())).thenReturn(Mono.defer(() -> attempts.getAndIncrement() == 0
                 ? Mono.error(new TransientDataAccessResourceException("temporary"))
                 : Mono.just(new ConsumerCheckpoint(1, start.plusSeconds(5), 1))));
@@ -177,8 +180,7 @@ class WordSnapshotServiceTests {
     }
 
     // The service is created inside withVirtualTime so its schedulers use virtual time.
-    private final java.util.concurrent.atomic.AtomicReference<WordSnapshotService> timed =
-            new java.util.concurrent.atomic.AtomicReference<>();
+    private final AtomicReference<WordSnapshotService> timed = new AtomicReference<>();
 
     private StepVerifier.FirstStep<Map<String, Long>> verifyEvery30Seconds(long initialRequest) {
         successfulSaves();

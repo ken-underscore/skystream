@@ -5,12 +5,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -35,6 +40,7 @@ import com.example.skystream.SkystreamApplication;
 import dto.JetstreamCommit;
 import dto.PostRecord;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 @Testcontainers(disabledWithoutDocker = true)
@@ -126,7 +132,7 @@ class WordBucketDatabaseTests {
 
     @Test
     void persistsTriggeringEventAndPublishesLastThirtySecondsAsUnnamedSse() {
-        var commits = java.util.stream.IntStream.rangeClosed(0, 6)
+        var commits = IntStream.rangeClosed(0, 6)
                 .mapToObj(i -> commit(i + 1, i * 5, "galaxy nebula")).toList();
         consumer.consumeCommits(Flux.fromIterable(commits)).block(timeout);
         assertEquals(Map.of("galaxy", 6L, "nebula", 6L), awaitSnapshot(Map.of("galaxy", 6L, "nebula", 6L)));
@@ -158,7 +164,7 @@ class WordBucketDatabaseTests {
         int[] durations = {30, 60, 300, 600, 1800, 3600};
         String[] words = {"thirty-seconds", "minute", "five-minutes", "ten-minutes", "half-hour", "hour"};
         long[] counts = {6, 5, 4, 3, 2, 1};
-        var expected = new java.util.HashMap<String, Long>();
+        var expected = new HashMap<String, Long>();
         expected.put("recent", 7L);
         for (int i = 0; i < durations.length; i++) {
             expected.put(words[i], counts[i]);
@@ -170,26 +176,26 @@ class WordBucketDatabaseTests {
                 .accept(MediaType.TEXT_EVENT_STREAM).retrieve().bodyToFlux(eventType).next().block(timeout);
         assertEquals(Map.of("thirty-seconds", 6L, "recent", 7L), defaultEvent.data());
         assertEquals(11, repository.checkpoint().block(timeout).latestSeq());
-        for (String invalid : List.of("0", "-30", "31", "3601", "invalid")) {
-            var status = client.get().uri("/api/word-buckets?windowSeconds=" + invalid)
-                    .exchangeToMono(response -> reactor.core.publisher.Mono.just(response.statusCode().value())).block(timeout);
-            assertEquals(400, status);
-        }
-        for (String invalid : List.of("-1", "1", "60001", "invalid")) {
-            var status = client.get().uri("/api/word-buckets?refreshIntervalMs=" + invalid)
-                    .exchangeToMono(response -> reactor.core.publisher.Mono.just(response.statusCode().value())).block(timeout);
-            assertEquals(400, status);
-        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"windowSeconds=0", "windowSeconds=-30", "windowSeconds=31", "windowSeconds=3601",
+            "windowSeconds=invalid", "refreshIntervalMs=-1", "refreshIntervalMs=1", "refreshIntervalMs=60001",
+            "refreshIntervalMs=invalid"})
+    void rejectsUnsupportedParameters(String query) {
+        var status = WebClient.create("http://localhost:" + port).get().uri("/api/word-buckets?" + query)
+                .exchangeToMono(response -> Mono.just(response.statusCode().value())).block(timeout);
+        assertEquals(400, status);
     }
 
     @Test
     void publishesEachBatchWhenQueriesKeepUpAndDropsWordsOutsideTheRollingWindow() {
-        var batches = java.util.stream.IntStream.range(0, 8)
+        var batches = IntStream.range(0, 8)
                 .mapToObj(i -> batch(i, i + 1, (i + 1) * 5,
                         bucket(i * 5, Map.of("word-" + i, i + 1)))).toList();
-        var expected = java.util.stream.IntStream.range(0, 8)
-                .mapToObj(i -> java.util.stream.IntStream.rangeClosed(Math.max(0, i - 5), i).boxed()
-                        .collect(java.util.stream.Collectors.toMap(j -> "word-" + j, j -> j + 1L))).toList();
+        var expected = IntStream.range(0, 8)
+                .mapToObj(i -> IntStream.rangeClosed(Math.max(0, i - 5), i).boxed()
+                        .collect(Collectors.toMap(j -> "word-" + j, j -> j + 1L))).toList();
         for (int i = 0; i < batches.size(); i++) {
             snapshots.persistBatches(Flux.just(batches.get(i))).blockLast(timeout);
             assertEquals(expected.get(i), awaitSnapshot(expected.get(i)));
@@ -228,12 +234,12 @@ class WordBucketDatabaseTests {
 
     @Test
     void preservesWordCountPairsAcrossChunksAndAddsCorrections() {
-        var counts = java.util.stream.IntStream.range(0, 501).boxed()
-                .collect(java.util.stream.Collectors.toMap(i -> "word-" + i, i -> i + 1));
+        var counts = IntStream.range(0, 501).boxed()
+                .collect(Collectors.toMap(i -> "word-" + i, i -> i + 1));
         repository.saveBatch(batch(0, 10, 5, bucket(0, counts))).block(timeout);
         repository.saveBatch(batch(10, 20, 10, bucket(0, counts))).block(timeout);
         var expected = counts.entrySet().stream()
-                .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue() * 2L));
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue() * 2L));
         assertEquals(expected, combinedCounts(origin, origin.plusSeconds(5)));
         assertEquals(20, repository.checkpoint().block(timeout).latestSeq());
         assertEquals(2, repository.checkpoint().block(timeout).flushCount());
@@ -259,7 +265,7 @@ class WordBucketDatabaseTests {
 
     @Test
     void reconnectSkipsPersistedEventsReplaysPendingWordsAndPublishesUpdates() {
-        var firstSession = java.util.stream.IntStream.rangeClosed(0, 4)
+        var firstSession = IntStream.rangeClosed(0, 4)
                 .mapToObj(i -> commit(i + 1, i * 5, "galaxy")).toList();
         consumer.consumeCommits(Flux.concat(Flux.fromIterable(firstSession), Flux.just(commit(6, 22, "pending")))).block(timeout);
         assertEquals(5, repository.checkpoint().block(timeout).latestSeq());
