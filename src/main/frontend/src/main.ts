@@ -35,13 +35,14 @@ transition.addEventListener('change', () => {
   renderer.setTransition(mode);
 });
 const refresh = element('refresh') as HTMLSelectElement;
+refresh.replaceChildren(...refreshIntervals.map(interval => new Option(interval.label, String(interval.milliseconds))));
 refresh.value = String(loadRefreshInterval());
 const snapshot = element('snapshot') as HTMLSelectElement;
 snapshot.replaceChildren(...snapshotWindows.map(window => new Option(window.label, String(window.seconds))));
 snapshot.value = String(loadSnapshotWindow());
 refresh.addEventListener('change', () => {
   const interval = Number(refresh.value);
-  if (!refreshIntervals.includes(interval)) return;
+  if (!refreshIntervals.some(option => option.milliseconds === interval)) return;
   saveRefreshInterval(interval);
   restartStream();
 });

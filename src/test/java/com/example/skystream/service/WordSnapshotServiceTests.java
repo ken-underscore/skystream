@@ -1,5 +1,6 @@
 package com.example.skystream.service;
 
+import static com.example.skystream.repository.WordBucketRepository.SNAPSHOT_WINDOW_SECONDS;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -38,7 +39,7 @@ class WordSnapshotServiceTests {
     }
 
     private Map<Integer, Map<String, Long>> windows(long value) {
-        return IntStream.of(30, 60, 300, 600, 1800, 3600).boxed()
+        return SNAPSHOT_WINDOW_SECONDS.stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(seconds -> seconds, seconds -> Map.of("hello", value)));
     }
 
@@ -77,7 +78,7 @@ class WordSnapshotServiceTests {
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(12);
         var visitors = IntStream.range(0, 100)
-                .mapToObj(i -> service.wordBuckets(new int[]{30, 60, 300, 600, 1800, 3600}[i % 6], 60000).next()).toList();
+                .mapToObj(i -> service.wordBuckets(SNAPSHOT_WINDOW_SECONDS.get(i % SNAPSHOT_WINDOW_SECONDS.size()), 60000).next()).toList();
         StepVerifier.create(Flux.merge(visitors)).expectNextCount(100).verifyComplete();
         verify(repository, times(1)).snapshotCounts(any());
     }

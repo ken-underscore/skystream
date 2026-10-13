@@ -1,10 +1,16 @@
-export const refreshIntervals = [0, 5_000, 10_000, 30_000, 60_000];
+export const refreshIntervals = [
+  { milliseconds: 0, label: 'Every batch' },
+  { milliseconds: 5_000, label: '5 seconds' },
+  { milliseconds: 10_000, label: '10 seconds' },
+  { milliseconds: 30_000, label: '30 seconds' },
+  { milliseconds: 60_000, label: '60 seconds' },
+];
 const storageKey = 'skystream.refreshIntervalMs';
 
 export function loadRefreshInterval(): number {
   try {
     const saved = Number(window.localStorage.getItem(storageKey));
-    return refreshIntervals.includes(saved) ? saved : 0;
+    return refreshIntervals.some(interval => interval.milliseconds === saved) ? saved : 0;
   } catch {
     return 0;
   }

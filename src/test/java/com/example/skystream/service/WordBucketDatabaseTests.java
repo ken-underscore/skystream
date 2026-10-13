@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -186,7 +187,7 @@ class WordBucketDatabaseTests {
     @Test
     void filteredAggregatesReturnEmptyWindowsAndReflectCorrectionsToOlderBuckets() {
         var empty = repository.snapshotCounts(origin).block(timeout);
-        assertEquals(6, empty.size());
+        assertEquals(Set.copyOf(WordBucketRepository.SNAPSHOT_WINDOW_SECONDS), empty.keySet());
         assertTrue(empty.values().stream().allMatch(Map::isEmpty));
         repository.saveBatch(batch(0, 10, 5, bucket(0, Map.of("hello", 3)))).block(timeout);
         var first = repository.snapshotCounts(origin.plusSeconds(5)).block(timeout);
