@@ -1,9 +1,14 @@
 import { easeCubicInOut, scaleOrdinal, scaleSqrt, select } from 'd3';
+import type { EnterElement, Selection } from 'd3';
 import cloud from 'd3-cloud';
 import type { WordCount } from './bucket';
+import { searchUrl } from './search';
 
 interface PositionedWord extends WordCount { size: number; x?: number | undefined; y?: number | undefined }
 export type CloudTransition = 'crossfade' | 'move' | 'fade' | 'none';
+
+const position = (word: PositionedWord) => `translate(${word.x ?? 0},${word.y ?? 0})`;
+const tooltip = (word: PositionedWord) => `${word.text}: ${word.count}`;
 
 export function createCloud(container: HTMLElement, onDraw: (placed: number, selected: number) => void) {
   const svg = select(container).select<SVGSVGElement>('svg');
@@ -17,12 +22,20 @@ export function createCloud(container: HTMLElement, onDraw: (placed: number, sel
   let hasDrawn = false;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
+  // Each word is a link wrapping its text. Words are keyed by text, so href, color, and text never change.
+  function appendWords(enter: Selection<EnterElement, PositionedWord, SVGGElement, unknown>) {
+    const links = enter.append<SVGAElement>('a').attr('href', word => searchUrl(word.text))
+      .attr('target', '_blank').attr('rel', 'noopener noreferrer');
+    links.append('text').attr('text-anchor', 'middle').attr('font-family', 'sans-serif')
+      .attr('fill', word => color(word.text)).text(word => word.text).append('title');
+    return links;
+  }
+
   function paint(target: typeof layer, words: PositionedWord[]) {
-    target.selectAll<SVGTextElement, PositionedWord>('text').data(words, word => word.text).join('text')
-      .attr('text-anchor', 'middle').attr('font-family', 'sans-serif').attr('font-size', word => word.size).attr('opacity', 1)
-      .attr('fill', word => color(word.text))
-      .attr('transform', word => `translate(${word.x ?? 0},${word.y ?? 0})`)
-      .text(word => word.text).append('title').text(word => `${word.text}: ${word.count}`);
+    const links = target.selectAll<SVGAElement, PositionedWord>('a').data(words, word => word.text)
+      .join(appendWords).attr('opacity', 1);
+    links.select('title').text(tooltip);
+    links.select('text').attr('font-size', word => word.size).attr('transform', position);
   }
 
   function render(words: PositionedWord[]) {
@@ -36,18 +49,14 @@ export function createCloud(container: HTMLElement, onDraw: (placed: number, sel
     if (mode === 'none') {
       paint(layer, words);
     } else if (mode === 'move') {
-      const text = layer.selectAll<SVGTextElement, PositionedWord>('text').data(words, word => word.text);
-      text.exit().transition('cloud').duration(duration).attr('opacity', 0).remove();
-      const entering = text.enter().append('text').attr('opacity', 0)
-        .attr('font-size', word => word.size)
-        .attr('transform', word => `translate(${word.x ?? 0},${word.y ?? 0})`);
-      const joined = entering.merge(text)
-        .attr('text-anchor', 'middle').attr('font-family', 'sans-serif').attr('fill', word => color(word.text))
-        .text(word => word.text);
-      joined.append('title').text(word => `${word.text}: ${word.count}`);
-      joined.transition('cloud').duration(duration).ease(easeCubicInOut)
-        .attr('font-size', word => word.size).attr('opacity', 1)
-        .attr('transform', word => `translate(${word.x ?? 0},${word.y ?? 0})`);
+      const links = layer.selectAll<SVGAElement, PositionedWord>('a').data(words, word => word.text);
+      links.exit().transition('cloud').duration(duration).attr('opacity', 0).remove();
+      const entering = appendWords(links.enter()).attr('opacity', 0);
+      entering.select('text').attr('font-size', word => word.size).attr('transform', position);
+      const joined = entering.merge(links);
+      joined.select('title').text(tooltip);
+      joined.transition('cloud').duration(duration).ease(easeCubicInOut).attr('opacity', 1)
+        .select('text').attr('font-size', word => word.size).attr('transform', position);
     } else {
       const outgoing = layer;
       layer = group.append('g').attr('class', 'cloud-layer').attr('opacity', 0);
