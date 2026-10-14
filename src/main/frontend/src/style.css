@@ -12,7 +12,7 @@ p { margin: 0; }
 .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; }
 .controls label { display: flex; align-items: center; gap: 8px; }
 select { font: inherit; color: #dce9f6; background: #142235; border: 1px solid #48627c; border-radius: 6px; padding: 7px 10px; }
-select:focus-visible { outline: 2px solid #79c8ff; outline-offset: 3px; }
+select:focus-visible, #cloud a:focus-visible { outline: 2px solid #79c8ff; outline-offset: 3px; }
 .transition-description { color: #93aac0; font-size: 13px; margin: 0 0 12px; }
 #status::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #f5c985; margin-right: 9px; }
 #status[data-connected='true']::before { background: #a5e3d5; }

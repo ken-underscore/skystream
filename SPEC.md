@@ -10,7 +10,7 @@ Acceptance criteria:
 - Keyboard users can reach each word with Tab and open it with Enter. Focus is visible.
 - Screen readers announce each word as a link.
 - Middle-click, Ctrl/Cmd-click, and the context menu's "copy link" work because each word is a real link.
-- Hovering shows a pointer cursor and a visual highlight. The tooltip still shows the count.
+- Hovering shows a pointer cursor, with no other highlight. The tooltip still shows the count.
 - Links work with every transition (crossfade, smooth movement, fade, instant), in demo mode, and after resizing. In smooth movement, a word that moves keeps the link for its own text.
 
 Out of scope: in-page post previews, search filters (language, date, author), analytics on clicks, and backend changes.
@@ -36,7 +36,7 @@ From the project root, `./mvnw test` should stay green; no Java changes are expe
 ```
 src/main/frontend/src/search.ts  → new: searchUrl(word), the Bluesky search link
 src/main/frontend/src/cloud.ts   → wrap each word's <text> in an SVG <a>, in paint() and the move transition
-src/main/frontend/src/style.css  → cursor, hover, and focus-visible styles for cloud links
+src/main/frontend/src/style.css  → focus-visible ring for cloud links
 src/main/frontend/index.html     → cloud <svg> role changed so its links are exposed to assistive technology
 src/main/frontend/README.md      → document clicking a word; add search.ts to the Code list
 ```
