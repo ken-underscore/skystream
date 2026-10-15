@@ -215,6 +215,22 @@ class WordBucketDatabaseTests {
     }
 
     @Test
+    void eachWindowKeepsItsTopWordsBreakingTiesAlphabetically() {
+        var old = IntStream.range(0, 100).boxed().collect(Collectors.toMap(i -> "old-" + i, i -> 1000));
+        var recent = new HashMap<>(Map.of("tie-b", 5, "tie-a", 5));
+        IntStream.range(0, 99).forEach(i -> recent.put("new-" + i, 10));
+        IntStream.range(0, 50).forEach(i -> recent.put("low-" + i, 1));
+        repository.saveBatch(batch(0, 10, 60, bucket(0, old), bucket(60, recent))).block(timeout);
+        // The 30- and 60-second windows end at :65 and exclude the old bucket at :00.
+        var recentTop = new HashMap<String, Long>(Map.of("tie-a", 5L));
+        IntStream.range(0, 99).forEach(i -> recentTop.put("new-" + i, 10L));
+        var oldTop = old.keySet().stream().collect(Collectors.toMap(word -> word, word -> 1000L));
+        var expected = WordBucketRepository.SNAPSHOT_WINDOW_SECONDS.stream()
+                .collect(Collectors.toMap(seconds -> seconds, seconds -> seconds <= 60 ? recentTop : oldTop));
+        assertEquals(expected, repository.snapshotCounts(origin.plusSeconds(65)).block(timeout));
+    }
+
+    @Test
     void repeatedOrConcurrentBatchIsAppliedOnce() {
         var first = batch(0, 10, 5, bucket(0, Map.of("hello", 3)), bucket(5, Map.of()));
         Flux.merge(repository.saveBatch(first), repository.saveBatch(first)).blockLast(timeout);
