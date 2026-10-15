@@ -59,7 +59,7 @@ class AggregatorServiceTests {
 
     @Test
     void resumesCheckpointAndRebuildsUnpersistedContributions() {
-        var checkpoint = new ConsumerCheckpoint(12, origin.plusSeconds(5), 1);
+        var checkpoint = new ConsumerCheckpoint(12, origin.plusSeconds(5));
         var batches = aggregator.createWordBuckets(Flux.just(
                 commit(11, 0, "duplicate", "en"),
                 commit(12, 5, "duplicate", "en"),

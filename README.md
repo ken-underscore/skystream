@@ -55,7 +55,7 @@ For example, events 100 and 101 at `:01` and `:02`, followed by event 102 at `:0
 
 `word_bucket` uses `started_at` as its primary key. The end is always start plus five seconds; no run ID or end column is stored. `bucket_word` stores additive counts keyed by bucket start and word.
 
-The singleton `consumer_checkpoint` stores the latest persisted sequence, greatest observed bucket start, and successful flush count. `WordBucketRepository.saveBatch` locks this row and writes all bucket increments and checkpoint progress in one transaction. A repeated batch already covered by the checkpoint does nothing. A batch whose preceding sequence differs from the checkpoint is rejected rather than risking duplicate contributions.
+The singleton `consumer_checkpoint` stores the latest persisted sequence and greatest observed bucket start. `WordBucketRepository.saveBatch` locks this row and writes all bucket increments and checkpoint progress in one transaction. A repeated batch already covered by the checkpoint does nothing. A batch whose preceding sequence differs from the checkpoint is rejected rather than risking duplicate contributions.
 
 Persistence is sequential with no prefetch. Transient database errors get up to three retries with backoff. The repository returns its result only after the transaction commits.
 
