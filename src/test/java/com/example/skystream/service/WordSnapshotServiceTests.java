@@ -27,6 +27,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 class WordSnapshotServiceTests {
     private final WordBucketRepository repository = mock(WordBucketRepository.class);
@@ -128,11 +129,20 @@ class WordSnapshotServiceTests {
             return end.equals(start.plusSeconds(5)) ? pending.asMono()
                     : Mono.just(windows(Duration.between(start, end).getSeconds()));
         });
-        for (int i = 0; i < 3; i++) {
-            assertEquals(i + 1, service.persistBatches(Flux.just(batch(i))).blockLast(timeout).latestSeq());
+        // Virtual time hands each checkpoint to the query worker synchronously, so both later checkpoints are
+        // waiting when the slow query finishes. A real worker thread can lag behind this test and fetch :10.
+        VirtualTimeScheduler.getOrSet();
+        try {
+            timed.set(new WordSnapshotService(repository));
+            for (int i = 0; i < 3; i++) {
+                assertEquals(i + 1, timed.get().persistBatches(Flux.just(batch(i))).blockLast(timeout).latestSeq());
+            }
+            pending.tryEmitValue(windows(5));
+            assertEquals(Map.of("hello", 15L), timed.get().updates(30, Duration.ZERO).next().block(timeout));
+        } finally {
+            timed.get().close();
+            VirtualTimeScheduler.reset();
         }
-        pending.tryEmitValue(windows(5));
-        awaitSnapshot(15);
         verify(repository, never()).snapshotCounts(start.plusSeconds(10));
         verify(repository, times(3)).saveBatch(any());
     }
@@ -179,7 +189,7 @@ class WordSnapshotServiceTests {
         assertEquals(2, attempts.get());
     }
 
-    // The service is created inside withVirtualTime so its schedulers use virtual time.
+    // Created while virtual time is installed, so the service's schedulers use it.
     private final AtomicReference<WordSnapshotService> timed = new AtomicReference<>();
 
     private StepVerifier.FirstStep<Map<String, Long>> verifyEvery30Seconds(long initialRequest) {
