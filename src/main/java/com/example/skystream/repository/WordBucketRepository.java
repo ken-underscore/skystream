@@ -43,7 +43,7 @@ public class WordBucketRepository {
     }
 
     private Mono<ConsumerCheckpoint> readCheckpoint(boolean lock) {
-        return database.sql("SELECT latest_seq, max_bucket_started_at, flush_count FROM consumer_checkpoint WHERE id = 1"
+        return database.sql("SELECT latest_seq, max_bucket_started_at FROM consumer_checkpoint WHERE id = 1"
                 + (lock ? " FOR UPDATE" : ""))
                 .map((row, metadata) -> checkpointFrom(row)).one();
     }
@@ -51,7 +51,7 @@ public class WordBucketRepository {
     private ConsumerCheckpoint checkpointFrom(Row row) {
         OffsetDateTime maxStart = row.get("max_bucket_started_at", OffsetDateTime.class);
         return new ConsumerCheckpoint(row.get("latest_seq", Long.class),
-                maxStart == null ? null : maxStart.toInstant(), row.get("flush_count", Long.class));
+                maxStart == null ? null : maxStart.toInstant());
     }
 
     /** Atomically adds all contributions and advances the sequence, returning only after commit. */
@@ -68,9 +68,9 @@ public class WordBucketRepository {
                 return Flux.fromIterable(batch.buckets()).concatMap(this::addBucket).then(
                         database.sql("""
                                 UPDATE consumer_checkpoint
-                                SET latest_seq = :seq, max_bucket_started_at = :maxStart, flush_count = flush_count + 1
+                                SET latest_seq = :seq, max_bucket_started_at = :maxStart
                                 WHERE id = 1
-                                RETURNING latest_seq, max_bucket_started_at, flush_count
+                                RETURNING latest_seq, max_bucket_started_at
                                 """)
                                 .bind("seq", batch.latestSeq())
                                 .bind("maxStart", batch.maxBucketStart().atOffset(ZoneOffset.UTC))

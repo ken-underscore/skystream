@@ -49,7 +49,7 @@ class WordSnapshotServiceTests {
     private void successfulSaves() {
         when(repository.saveBatch(any())).thenAnswer(invocation -> {
             BucketBatch batch = invocation.getArgument(0);
-            return Mono.just(new ConsumerCheckpoint(batch.latestSeq(), batch.maxBucketStart(), batch.latestSeq()));
+            return Mono.just(new ConsumerCheckpoint(batch.latestSeq(), batch.maxBucketStart()));
         });
     }
 
@@ -68,7 +68,7 @@ class WordSnapshotServiceTests {
                 .then(() -> {
                     service.persistBatches(Flux.just(batch(0))).subscribe();
                     verify(repository, never()).snapshotCounts(any());
-                    commit.tryEmitValue(new ConsumerCheckpoint(1, start.plusSeconds(5), 1));
+                    commit.tryEmitValue(new ConsumerCheckpoint(1, start.plusSeconds(5)));
                 })
                 .expectNext(Map.of("hello", 12L)).verifyComplete();
         verify(repository).snapshotCounts(start.plusSeconds(5));
@@ -170,11 +170,11 @@ class WordSnapshotServiceTests {
         var attempts = new AtomicInteger();
         when(repository.saveBatch(any())).thenReturn(Mono.defer(() -> attempts.getAndIncrement() == 0
                 ? Mono.error(new TransientDataAccessResourceException("temporary"))
-                : Mono.just(new ConsumerCheckpoint(1, start.plusSeconds(5), 1))));
+                : Mono.just(new ConsumerCheckpoint(1, start.plusSeconds(5)))));
         when(repository.snapshotCounts(any())).thenReturn(Mono.just(windows(1)));
         StepVerifier.withVirtualTime(() -> service.persistBatches(Flux.just(batch(0))))
                 .thenAwait(Duration.ofSeconds(2))
-                .expectNext(new ConsumerCheckpoint(1, start.plusSeconds(5), 1)).verifyComplete();
+                .expectNext(new ConsumerCheckpoint(1, start.plusSeconds(5))).verifyComplete();
         awaitSnapshot(1);
         assertEquals(2, attempts.get());
     }

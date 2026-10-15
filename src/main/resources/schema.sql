@@ -13,9 +13,8 @@ CREATE TABLE IF NOT EXISTS bucket_word (
 CREATE TABLE IF NOT EXISTS consumer_checkpoint (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     latest_seq BIGINT NOT NULL CHECK (latest_seq >= 0),
-    max_bucket_started_at TIMESTAMPTZ,
-    flush_count BIGINT NOT NULL CHECK (flush_count >= 0)
+    max_bucket_started_at TIMESTAMPTZ
 );
 
-INSERT INTO consumer_checkpoint (id, latest_seq, flush_count)
-VALUES (1, 0, 0) ON CONFLICT (id) DO NOTHING;
+INSERT INTO consumer_checkpoint (id, latest_seq)
+VALUES (1, 0) ON CONFLICT (id) DO NOTHING;

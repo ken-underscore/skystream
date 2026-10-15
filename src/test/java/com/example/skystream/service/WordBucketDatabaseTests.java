@@ -101,7 +101,7 @@ class WordBucketDatabaseTests {
     @BeforeEach
     void clearDatabase() {
         database.sql("TRUNCATE word_bucket CASCADE").fetch().rowsUpdated()
-                .then(database.sql("UPDATE consumer_checkpoint SET latest_seq = 0, max_bucket_started_at = NULL, flush_count = 0 WHERE id = 1")
+                .then(database.sql("UPDATE consumer_checkpoint SET latest_seq = 0, max_bucket_started_at = NULL WHERE id = 1")
                         .fetch().rowsUpdated()).block(timeout);
     }
 
@@ -138,7 +138,6 @@ class WordBucketDatabaseTests {
         assertEquals(Map.of("galaxy", 6L, "nebula", 6L), awaitSnapshot(Map.of("galaxy", 6L, "nebula", 6L)));
         var checkpoint = repository.checkpoint().block(timeout);
         assertEquals(7, checkpoint.latestSeq());
-        assertEquals(6, checkpoint.flushCount());
         // The event at :30 is persisted too, but this snapshot covers [:00, :30).
         assertEquals(Map.of("galaxy", 1L, "nebula", 1L), combinedCounts(origin.plusSeconds(30), origin.plusSeconds(35)));
         var event = WebClient.create("http://localhost:" + port).get().uri("/api/word-buckets")
@@ -216,12 +215,11 @@ class WordBucketDatabaseTests {
     }
 
     @Test
-    void repeatedOrConcurrentBatchDoesNotAddCountsOrAdvanceFlushCountTwice() {
+    void repeatedOrConcurrentBatchIsAppliedOnce() {
         var first = batch(0, 10, 5, bucket(0, Map.of("hello", 3)), bucket(5, Map.of()));
         Flux.merge(repository.saveBatch(first), repository.saveBatch(first)).blockLast(timeout);
         assertEquals(Map.of("hello", 3L), combinedCounts(origin, origin.plusSeconds(5)));
         assertEquals(10, repository.checkpoint().block(timeout).latestSeq());
-        assertEquals(1, repository.checkpoint().block(timeout).flushCount());
     }
 
     @Test
@@ -242,7 +240,6 @@ class WordBucketDatabaseTests {
                 .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue() * 2L));
         assertEquals(expected, combinedCounts(origin, origin.plusSeconds(5)));
         assertEquals(20, repository.checkpoint().block(timeout).latestSeq());
-        assertEquals(2, repository.checkpoint().block(timeout).flushCount());
     }
 
     @Test
@@ -253,7 +250,6 @@ class WordBucketDatabaseTests {
                 .map((row, meta) -> row.get("total", Long.class)).one().block(timeout);
         assertEquals(0L, headers);
         assertEquals(0, repository.checkpoint().block(timeout).latestSeq());
-        assertEquals(0, repository.checkpoint().block(timeout).flushCount());
     }
 
     @Test
@@ -269,14 +265,12 @@ class WordBucketDatabaseTests {
                 .mapToObj(i -> commit(i + 1, i * 5, "galaxy")).toList();
         consumer.consumeCommits(Flux.concat(Flux.fromIterable(firstSession), Flux.just(commit(6, 22, "pending")))).block(timeout);
         assertEquals(5, repository.checkpoint().block(timeout).latestSeq());
-        assertEquals(4, repository.checkpoint().block(timeout).flushCount());
         assertEquals(Map.of("galaxy", 4L), awaitSnapshot(Map.of("galaxy", 4L)));
         consumer.consumeCommits(Flux.just(
                 commit(4, 15, "duplicate"), commit(5, 20, "duplicate"),
                 commit(6, 22, "pending"), commit(7, 25, "galaxy"), commit(8, 30, "galaxy"))).block(timeout);
         assertEquals(Map.of("galaxy", 6L, "pending", 1L), combinedCounts(origin, origin.plusSeconds(30)));
         assertEquals(8, repository.checkpoint().block(timeout).latestSeq());
-        assertEquals(6, repository.checkpoint().block(timeout).flushCount());
         assertEquals(Map.of("galaxy", 6L, "pending", 1L), awaitSnapshot(Map.of("galaxy", 6L, "pending", 1L)));
     }
 }
