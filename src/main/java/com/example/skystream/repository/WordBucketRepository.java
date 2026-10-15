@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -27,8 +28,13 @@ import reactor.core.publisher.Mono;
 public class WordBucketRepository {
     /** Snapshot durations, in seconds, that {@link #snapshotCounts} calculates. */
     public static final List<Integer> SNAPSHOT_WINDOW_SECONDS = List.of(30, 60, 300, 600, 1800, 3600);
+    /** Words kept per window: the browser draws at most this many. */
+    public static final int TOP_WORDS = 100;
 
     private record WindowCount(int seconds, String word, long count) {}
+    // Same order as the browser's, so both keep the same words when counts tie at the cutoff.
+    private static final Comparator<WindowCount> MOST_FREQUENT =
+            Comparator.comparingLong(WindowCount::count).reversed().thenComparing(WindowCount::word);
 
     private final DatabaseClient database;
     private final TransactionalOperator transactions;
@@ -113,7 +119,7 @@ public class WordBucketRepository {
                 .fetch().rowsUpdated().then();
     }
 
-    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Windows without words are omitted. */
+    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Each window keeps its {@value #TOP_WORDS} most frequent words; windows without words are omitted. */
     public Mono<Map<Integer, Map<String, Long>>> snapshotCounts(Instant end) {
         // Columns must match SNAPSHOT_WINDOW_SECONDS.
         return database.sql("""
@@ -140,7 +146,8 @@ public class WordBucketRepository {
                 })
                 .all()
                 .flatMapIterable(counts -> counts)
-                .collect(Collectors.groupingBy(WindowCount::seconds,
-                        Collectors.toUnmodifiableMap(WindowCount::word, WindowCount::count)));
+                .collect(Collectors.groupingBy(WindowCount::seconds, Collectors.collectingAndThen(Collectors.toList(),
+                        counts -> counts.stream().sorted(MOST_FREQUENT).limit(TOP_WORDS)
+                                .collect(Collectors.toUnmodifiableMap(WindowCount::word, WindowCount::count)))));
     }
 }
