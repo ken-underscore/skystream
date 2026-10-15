@@ -38,7 +38,7 @@ curl -N 'http://localhost:8080/api/word-buckets?windowSeconds=3600&refreshInterv
 ./mvnw test
 ```
 
-Tests use temporary PostgreSQL 17 containers, not the Compose database, and disable the real Jetstream connection. Database tests skip when Docker is unavailable.
+Tests use temporary PostgreSQL 17 containers, not the Compose database, and disable the real Jetstream connection. Database tests skip when Docker is unavailable. GitHub Actions (`.github/workflows/ci.yml`) runs the Java tests and the frontend build for pull requests to `main` and pushes to `main`; both must pass before a pull request can merge.
 
 ## Accumulation and flushing
 
