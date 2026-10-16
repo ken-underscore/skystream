@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,18 +77,25 @@ class PostRepositoryTests {
 
     @Test
     void captureRollsBackWithTheCallersTransaction() {
+        repository.capture(List.of(post("b", Duration.ZERO)), List.of()).block(timeout);
         var transactions = TransactionalOperator.create(transactionManager);
-        StepVerifier.create(transactions.transactional(repository.capture(List.of(post("a", Duration.ZERO)), List.of())
+        StepVerifier.create(transactions.transactional(repository.capture(List.of(post("a", Duration.ZERO)), List.of("b"))
                         .then(Mono.error(new IllegalStateException("word-cloud write failed")))))
                 .expectErrorMessage("word-cloud write failed").verify(timeout);
-        assertEquals(List.of(), uris());
+        assertEquals(List.of("b"), uris());
+    }
+
+    @Test
+    void captureStripsNulCharactersInsteadOfFailing() {
+        repository.capture(List.of(new SearchPost("a", "before\u0000after", now)), List.of()).block(timeout);
+        assertEquals("beforeafter", repository.newestUnembedded(now.minusSeconds(60), 1).blockFirst(timeout).text());
     }
 
     @Test
     void newestUnembeddedSkipsEmbeddedPostsAndThoseOutsideTheWindow() {
         repository.capture(List.of(post("old", Duration.ofHours(30)), post("hour", Duration.ofHours(1)),
                 post("minute", Duration.ofMinutes(1)), post("embedded", Duration.ZERO)), List.of()).block(timeout);
-        repository.saveEmbeddings(List.of("embedded"), List.of(vector(1))).block(timeout);
+        repository.saveEmbeddings(Map.of("embedded", vector(1))).block(timeout);
         var pending = repository.newestUnembedded(now.minus(Duration.ofHours(24)), 10).map(SearchPost::uri)
                 .collectList().block(timeout);
         assertEquals(List.of("minute", "hour"), pending);
@@ -100,8 +108,8 @@ class PostRepositoryTests {
     void nearestReturnsOnlyEmbeddedPostsMostSimilarFirst() {
         repository.capture(List.of(post("same", Duration.ZERO), post("close", Duration.ZERO), post("far", Duration.ZERO),
                 post("waiting", Duration.ZERO)), List.of()).block(timeout);
-        repository.saveEmbeddings(List.of("same", "close", "far"),
-                List.of(vector(1, 0), vector(0.8f, 0.6f), vector(0, 1))).block(timeout);
+        repository.saveEmbeddings(Map.of("same", vector(1, 0), "close", vector(0.8f, 0.6f), "far", vector(0, 1)))
+                .block(timeout);
         var hits = repository.nearest(vector(1, 0), 10).collectList().block(timeout);
         assertEquals(List.of("same", "close", "far"), hits.stream().map(hit -> hit.post().uri()).toList());
         assertEquals(1.0, hits.get(0).similarity(), 0.001);
@@ -113,7 +121,7 @@ class PostRepositoryTests {
     void expireRemovesPostsSeenBeforeTheCutoffEmbeddedOrNot() {
         repository.capture(List.of(post("old", Duration.ofHours(25)), post("old-embedded", Duration.ofHours(26)),
                 post("recent", Duration.ofHours(1))), List.of()).block(timeout);
-        repository.saveEmbeddings(List.of("old-embedded"), List.of(vector(1))).block(timeout);
+        repository.saveEmbeddings(Map.of("old-embedded", vector(1))).block(timeout);
         assertEquals(2L, repository.expire(now.minus(Duration.ofHours(24))).block(timeout));
         assertEquals(List.of("recent"), uris());
         assertNull(repository.nearest(vector(1), 10).blockFirst(timeout));

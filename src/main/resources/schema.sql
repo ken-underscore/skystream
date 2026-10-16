@@ -33,3 +33,5 @@ CREATE TABLE IF NOT EXISTS search_post (
 -- Rows without an embedding are skipped by the HNSW index and found through the partial index.
 CREATE INDEX IF NOT EXISTS search_post_embedding_hnsw ON search_post USING hnsw (embedding halfvec_cosine_ops);
 CREATE INDEX IF NOT EXISTS search_post_unembedded ON search_post (seen_at DESC) WHERE embedding IS NULL;
+-- Expiry deletes by age across all rows.
+CREATE INDEX IF NOT EXISTS search_post_seen_at ON search_post (seen_at);

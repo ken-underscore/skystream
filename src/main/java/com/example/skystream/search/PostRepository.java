@@ -4,12 +4,15 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Repository;
 
+import io.r2dbc.spi.Row;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -30,7 +33,10 @@ public class PostRepository {
         this.database = database;
     }
 
-    /** Inserts new posts and deletes removed ones in the caller's transaction. Existing URIs are left unchanged. */
+    /**
+     * Inserts new posts and deletes removed ones in the caller's transaction. Existing URIs are left unchanged. NUL
+     * characters are stripped: PostgreSQL rejects them in text, and one post must not fail the caller's batch.
+     */
     public Mono<Void> capture(List<SearchPost> posts, List<String> deletedUris) {
         Mono<Long> inserted = posts.isEmpty() ? Mono.empty() : database.sql("""
                 INSERT INTO search_post (uri, text, seen_at)
@@ -39,7 +45,7 @@ public class PostRepository {
                 ON CONFLICT (uri) DO NOTHING
                 """)
                 .bind("uris", posts.stream().map(SearchPost::uri).toArray(String[]::new))
-                .bind("texts", posts.stream().map(SearchPost::text).toArray(String[]::new))
+                .bind("texts", posts.stream().map(post -> post.text().replace("\u0000", "")).toArray(String[]::new))
                 .bind("seen", posts.stream().map(post -> ChronoUnit.MICROS.between(Instant.EPOCH, post.seenAt()))
                         .toArray(Long[]::new))
                 .fetch().rowsUpdated();
@@ -66,20 +72,21 @@ public class PostRepository {
                 """)
                 .bind("since", since.atOffset(ZoneOffset.UTC))
                 .bind("limit", limit)
-                .map((row, metadata) -> new SearchPost(row.get("uri", String.class), row.get("text", String.class),
-                        row.get("seen_at", OffsetDateTime.class).toInstant()))
+                .map((row, metadata) -> postFrom(row))
                 .all();
     }
 
-    /** Stores one embedding per URI. Posts deleted in the meantime are skipped. */
-    public Mono<Void> saveEmbeddings(List<String> uris, List<float[]> embeddings) {
+    /** Stores each post's embedding, keyed by URI. Posts deleted in the meantime are skipped. */
+    public Mono<Void> saveEmbeddings(Map<String, float[]> embeddings) {
+        if (embeddings.isEmpty()) return Mono.empty();
+        var uris = embeddings.keySet().toArray(String[]::new);
         return database.sql("""
                 UPDATE search_post AS post SET embedding = CAST(saved.embedding AS halfvec)
                 FROM UNNEST(CAST(:uris AS text[]), CAST(:embeddings AS text[])) AS saved(uri, embedding)
                 WHERE post.uri = saved.uri
                 """)
-                .bind("uris", uris.toArray(String[]::new))
-                .bind("embeddings", embeddings.stream().map(PostRepository::literal).toArray(String[]::new))
+                .bind("uris", uris)
+                .bind("embeddings", Arrays.stream(uris).map(uri -> literal(embeddings.get(uri))).toArray(String[]::new))
                 .fetch().rowsUpdated().then();
     }
 
@@ -92,8 +99,7 @@ public class PostRepository {
                 """)
                 .bind("vector", literal(vector))
                 .bind("limit", limit)
-                .map((row, metadata) -> new Hit(new SearchPost(row.get("uri", String.class), row.get("text", String.class),
-                        row.get("seen_at", OffsetDateTime.class).toInstant()), row.get("similarity", Double.class)))
+                .map((row, metadata) -> new Hit(postFrom(row), row.get("similarity", Double.class)))
                 .all();
     }
 
@@ -105,6 +111,11 @@ public class PostRepository {
                     return new Backlog(row.get("posts", Long.class), oldest == null ? null : oldest.toInstant());
                 })
                 .one();
+    }
+
+    private static SearchPost postFrom(Row row) {
+        return new SearchPost(row.get("uri", String.class), row.get("text", String.class),
+                row.get("seen_at", OffsetDateTime.class).toInstant());
     }
 
     /** pgvector's text form, e.g. {@code [0.1,0.2]}: R2DBC has no pgvector type, so vectors are cast from text. */
