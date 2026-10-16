@@ -32,20 +32,22 @@ public class GemmaEmbedder implements Embedder, AutoCloseable {
     public GemmaEmbedder(Path modelDir, int threads) {
         try {
             // tokenizer.json's template adds <bos> and <eos>; batches are padded here to their longest text.
+            // tokenizer_config.json carries the model's 2048-token limit: without it, DJL caps texts at 512.
             tokenizer = HuggingFaceTokenizer.builder()
                     .optTokenizerPath(modelDir.resolve("tokenizer.json"))
+                    .optTokenizerConfigPath(modelDir.resolve("tokenizer_config.json").toString())
                     .optAddSpecialTokens(true)
                     .optTruncation(true)
                     .optMaxLength(MAX_TOKENS)
                     .optPadding(false)
                     .build();
-            var options = new OrtSession.SessionOptions();
-            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-            options.setIntraOpNumThreads(threads);
-            options.setInterOpNumThreads(threads);
-            // model.onnx_data must be a real file (or hard link) next to model.onnx: ONNX Runtime rejects symlinks
-            // that resolve outside the model directory.
-            session = environment.createSession(modelDir.resolve("onnx/model.onnx").toString(), options);
+            try (var options = new OrtSession.SessionOptions()) {
+                options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+                options.setIntraOpNumThreads(threads);
+                // model.onnx_data must be a real file (or hard link) next to model.onnx: ONNX Runtime rejects
+                // symlinks that resolve outside the model directory.
+                session = environment.createSession(modelDir.resolve("onnx/model.onnx").toString(), options);
+            }
         } catch (Exception e) {
             throw new IllegalStateException("Could not load the embedding model from " + modelDir, e);
         }
@@ -99,7 +101,10 @@ public class GemmaEmbedder implements Embedder, AutoCloseable {
 
     @Override
     public void close() throws OrtException {
-        session.close();
-        tokenizer.close();
+        try {
+            session.close();
+        } finally {
+            tokenizer.close();
+        }
     }
 }

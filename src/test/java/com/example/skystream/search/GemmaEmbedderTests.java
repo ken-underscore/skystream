@@ -2,7 +2,6 @@ package com.example.skystream.search;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,24 +12,33 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
  * Checks that the Java embedder reproduces the vectors the Python evaluation measured (embedding-fixture.json,
- * recorded with fastembed). Skipped unless the model has been fetched with scripts/fetch-model.sh.
+ * recorded with fastembed). Skipped, and reported as skipped, unless the model has been fetched with
+ * scripts/fetch-model.sh.
  */
+@EnabledIf(value = "modelFetched", disabledReason = "embedding model not fetched; run scripts/fetch-model.sh")
 class GemmaEmbedderTests {
     private static final Path MODEL = Path.of(System.getProperty("skystream.search.model-dir", "models/embeddinggemma-300m"));
+    private static final List<String> documents = new ArrayList<>();
+    private static final List<String> queries = new ArrayList<>();
+    private static final List<long[]> documentIds = new ArrayList<>();
+    private static final List<long[]> queryIds = new ArrayList<>();
+    private static final List<float[]> documentVectors = new ArrayList<>();
+    private static final List<float[]> queryVectors = new ArrayList<>();
     private static GemmaEmbedder embedder;
-    private static final List<String> documents = new ArrayList<>(), queries = new ArrayList<>();
-    private static final List<long[]> documentIds = new ArrayList<>(), queryIds = new ArrayList<>();
-    private static final List<float[]> documentVectors = new ArrayList<>(), queryVectors = new ArrayList<>();
+
+    static boolean modelFetched() {
+        return Files.exists(MODEL.resolve("onnx/model.onnx"));
+    }
 
     @BeforeAll
     static void load() throws Exception {
-        assumeTrue(Files.exists(MODEL.resolve("onnx/model.onnx")), "embedding model not fetched; run scripts/fetch-model.sh");
         embedder = new GemmaEmbedder(MODEL, 2);
         JsonNode fixture = new ObjectMapper().readTree(GemmaEmbedderTests.class.getResourceAsStream("/embedding-fixture.json"));
         for (JsonNode item : fixture.get("items")) {
@@ -63,6 +71,17 @@ class GemmaEmbedderTests {
         float[][] vectors = embedder.embedDocuments(documents);
         for (int i = 0; i < documents.size(); i++) {
             assertEquals(1.0, cosine(vectors[i], documentVectors.get(i)), 1e-4, documents.get(i));
+        }
+    }
+
+    @Test
+    void documentVectorsMatchPythonAcrossSeveralBatches() {
+        // More texts than one batch of 32, so later batches and the reordering across them are exercised too.
+        var twice = new ArrayList<>(documents);
+        twice.addAll(documents);
+        float[][] vectors = embedder.embedDocuments(twice);
+        for (int i = 0; i < twice.size(); i++) {
+            assertEquals(1.0, cosine(vectors[i], documentVectors.get(i % documents.size())), 1e-4, twice.get(i));
         }
     }
 
