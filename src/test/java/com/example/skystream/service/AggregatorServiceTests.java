@@ -4,24 +4,42 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
 import com.example.skystream.model.ConsumerCheckpoint;
+import com.example.skystream.search.SearchPost;
 import dto.JetstreamCommit;
 import dto.PostRecord;
 import reactor.core.publisher.Flux;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 
 class AggregatorServiceTests {
-    private final AggregatorService aggregator = new AggregatorService();
+    private final AggregatorService aggregator = new AggregatorService(true);
     private final Instant origin = Instant.parse("2026-10-04T12:00:00Z");
 
     private JetstreamCommit commit(long seq, double seconds, String text, String language) {
+        return post(seq, seconds, text, language, null);
+    }
+
+    private JetstreamCommit post(long seq, double seconds, String text, String language, JsonNode reply) {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
                 "2020-01-01T00:00:00Z", origin.plusNanos((long) (seconds * 1_000_000_000)).toString(),
-                "rev", "create", "app.bsky.feed.post", "key", "cid",
-                new PostRecord("app.bsky.feed.post", text, "2020-01-01T00:00:00Z", new String[]{language}));
+                "rev", "create", "app.bsky.feed.post", "key" + seq, "cid",
+                new PostRecord("app.bsky.feed.post", text, "2020-01-01T00:00:00Z", new String[]{language}, reply));
+    }
+
+    private JetstreamCommit delete(long seq, double seconds, long deletedSeq) {
+        return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
+                "2020-01-01T00:00:00Z", origin.plusNanos((long) (seconds * 1_000_000_000)).toString(),
+                "rev", "delete", "app.bsky.feed.post", "key" + deletedSeq, null, null);
+    }
+
+    private static String uri(long seq) {
+        return "at://did:test/app.bsky.feed.post/key" + seq;
     }
 
     @Test
@@ -109,6 +127,43 @@ class AggregatorServiceTests {
         var batches = aggregator.createWordBuckets(Flux.just(commit(1, 1, "pending", "en")), ConsumerCheckpoint.empty())
                 .collectList().block(Duration.ofSeconds(5));
         assertTrue(batches.isEmpty());
+    }
+
+    @Test
+    void capturesEnglishTopLevelPostsWithFiveWordsOnceLinksAreRemoved() {
+        var batch = aggregator.createWordBuckets(Flux.just(
+                commit(1, 0, "Finally   did Sahale Arm yesterday https://example.com/photo", "en"),
+                commit(2, 1, "four words only here https://example.com", "en"),
+                commit(3, 2, "cinq mots en français ici", "fr"),
+                post(4, 3, "a reply with five words", "en", JsonNodeFactory.instance.objectNode()),
+                commit(5, 5, "next bucket flushes the batch", "en-US")), ConsumerCheckpoint.empty())
+                .blockFirst(Duration.ofSeconds(5));
+        assertEquals(List.of(new SearchPost(uri(1), "Finally did Sahale Arm yesterday", origin),
+                new SearchPost(uri(5), "next bucket flushes the batch", origin.plusSeconds(5))), batch.posts());
+        assertEquals(List.of(), batch.deletedUris());
+    }
+
+    @Test
+    void deleteCancelsACreateInTheSameBatchAndIsSavedOtherwise() {
+        var batch = aggregator.createWordBuckets(Flux.just(
+                commit(10, 0, "a post that is deleted right away", "en"),
+                delete(11, 1, 10),
+                delete(12, 2, 3),
+                commit(13, 5, "short", "en")), ConsumerCheckpoint.empty())
+                .blockFirst(Duration.ofSeconds(5));
+        assertEquals(List.of(), batch.posts());
+        assertEquals(List.of(uri(3)), batch.deletedUris());
+    }
+
+    @Test
+    void capturesNothingWhileSearchIsDisabled() {
+        var batch = new AggregatorService(false).createWordBuckets(Flux.just(
+                commit(1, 0, "a post with five whole words", "en"),
+                delete(2, 1, 0),
+                commit(3, 5, "another post with five words", "en")), ConsumerCheckpoint.empty())
+                .blockFirst(Duration.ofSeconds(5));
+        assertEquals(List.of(), batch.posts());
+        assertEquals(List.of(), batch.deletedUris());
     }
 
     @Test

@@ -39,7 +39,8 @@ class WordSnapshotServiceTests {
     void close() { service.close(); }
 
     private BucketBatch batch(int i) {
-        return new BucketBatch(i, i + 1, start.plusSeconds((i + 1) * 5), List.of(new WordBucket(start, Map.of())));
+        return new BucketBatch(i, i + 1, start.plusSeconds((i + 1) * 5), List.of(new WordBucket(start, Map.of())),
+                List.of(), List.of());
     }
 
     private Map<Integer, Map<String, Long>> windows(long value) {

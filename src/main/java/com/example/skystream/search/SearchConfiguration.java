@@ -16,4 +16,9 @@ public class SearchConfiguration {
             @Value("${skystream.search.threads:2}") int threads) {
         return new GemmaEmbedder(modelDir, threads);
     }
+
+    @Bean
+    PostExpiry postExpiry(PostRepository posts) {
+        return new PostExpiry(posts);
+    }
 }

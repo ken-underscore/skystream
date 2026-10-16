@@ -37,6 +37,7 @@ import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordBucket;
 import com.example.skystream.repository.WordBucketRepository;
+import com.example.skystream.search.SearchPost;
 import com.example.skystream.SkystreamApplication;
 import dto.JetstreamCommit;
 import dto.PostRecord;
@@ -69,7 +70,7 @@ class WordBucketDatabaseTests {
     private final Duration timeout = Duration.ofSeconds(10);
 
     private BucketBatch batch(long previous, long seq, int maxSecond, WordBucket... buckets) {
-        return new BucketBatch(previous, seq, origin.plusSeconds(maxSecond), List.of(buckets));
+        return new BucketBatch(previous, seq, origin.plusSeconds(maxSecond), List.of(buckets), List.of(), List.of());
     }
 
     private WordBucket bucket(int second, Map<String, Integer> counts) {
@@ -80,7 +81,7 @@ class WordBucketDatabaseTests {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
                 "2020-01-01T00:00:00Z", origin.plusSeconds(second).toString(), "rev", "create",
                 "app.bsky.feed.post", "key" + seq, "cid" + seq,
-                new PostRecord("app.bsky.feed.post", text, origin.toString(), new String[]{"en"}));
+                new PostRecord("app.bsky.feed.post", text, origin.toString(), new String[]{"en"}, null));
     }
 
     private Map<String, Long> awaitSnapshot(Map<String, Long> expected) {
@@ -102,9 +103,36 @@ class WordBucketDatabaseTests {
 
     @BeforeEach
     void clearDatabase() {
-        database.sql("TRUNCATE word_bucket CASCADE").fetch().rowsUpdated()
+        database.sql("TRUNCATE word_bucket, search_post CASCADE").fetch().rowsUpdated()
                 .then(database.sql("UPDATE consumer_checkpoint SET latest_seq = 0, max_bucket_started_at = NULL WHERE id = 1")
                         .fetch().rowsUpdated()).block(timeout);
+    }
+
+    private List<String> searchPostUris() {
+        return database.sql("SELECT uri FROM search_post ORDER BY uri").map((row, metadata) -> row.get("uri", String.class))
+                .all().collectList().block(timeout);
+    }
+
+    @Test
+    void searchPostsAreSavedWithTheCheckpointAndOnlyOnce() {
+        repository.saveBatch(new BucketBatch(0, 5, origin.plusSeconds(5), List.of(bucket(0, Map.of("hello", 1))),
+                List.of(new SearchPost("at://a", "first post", origin), new SearchPost("at://b", "second post", origin)),
+                List.of())).block(timeout);
+        var next = new BucketBatch(5, 9, origin.plusSeconds(10), List.of(bucket(5, Map.of("hello", 1))),
+                List.of(new SearchPost("at://c", "third post", origin)), List.of("at://b"));
+        repository.saveBatch(next).block(timeout);
+        repository.saveBatch(next).block(timeout);  // An unacknowledged retry is skipped entirely.
+        assertEquals(List.of("at://a", "at://c"), searchPostUris());
+        assertEquals(9, repository.checkpoint().block(timeout).latestSeq());
+    }
+
+    @Test
+    void rejectedBatchSavesNoSearchPosts() {
+        var gap = new BucketBatch(99, 100, origin.plusSeconds(5), List.of(bucket(0, Map.of("hello", 1))),
+                List.of(new SearchPost("at://a", "orphan post", origin)), List.of());
+        StepVerifier.create(repository.saveBatch(gap))
+                .expectErrorMessage("Batch does not continue the persisted sequence; reload checkpoint").verify(timeout);
+        assertEquals(List.of(), searchPostUris());
     }
 
     @Test

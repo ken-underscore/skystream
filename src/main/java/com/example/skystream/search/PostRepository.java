@@ -1,5 +1,6 @@
 package com.example.skystream.search;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -23,6 +24,9 @@ import reactor.core.publisher.Mono;
 @Repository
 @DependsOnDatabaseInitialization
 public class PostRepository {
+    /** How long posts stay searchable. */
+    public static final Duration RETENTION = Duration.ofHours(24);
+
     public record Hit(SearchPost post, double similarity) {}
 
     public record Backlog(long posts, Instant oldestSeenAt) {}
