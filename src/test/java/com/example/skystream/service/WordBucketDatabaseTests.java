@@ -31,6 +31,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
@@ -48,7 +49,8 @@ import reactor.test.StepVerifier;
         properties = {"spring.docker.compose.enabled=false", "skystream.jetstream.enabled=false"})
 class WordBucketDatabaseTests {
     @Container
-    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine");
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer(
+            DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
 
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry properties) {

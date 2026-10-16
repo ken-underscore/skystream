@@ -18,3 +18,18 @@ CREATE TABLE IF NOT EXISTS consumer_checkpoint (
 
 INSERT INTO consumer_checkpoint (id, latest_seq)
 VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
+
+-- Semantic search. Posts are captured with each ingestion batch without an embedding; a worker fills it in later.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS search_post (
+    uri TEXT CONSTRAINT search_post_uri_pk PRIMARY KEY,
+    text TEXT NOT NULL,
+    -- Jetstream's time for the event, not the author-supplied createdAt.
+    seen_at TIMESTAMPTZ NOT NULL,
+    embedding HALFVEC(768)
+);
+
+-- Rows without an embedding are skipped by the HNSW index and found through the partial index.
+CREATE INDEX IF NOT EXISTS search_post_embedding_hnsw ON search_post USING hnsw (embedding halfvec_cosine_ops);
+CREATE INDEX IF NOT EXISTS search_post_unembedded ON search_post (seen_at DESC) WHERE embedding IS NULL;
