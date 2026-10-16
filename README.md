@@ -77,6 +77,18 @@ The first available cached snapshot is sent immediately on each connection, incl
 
 Spring Boot initializes `schema.sql` before the repository is used. Repeated startups preserve existing counts and checkpoint progress.
 
+## Semantic search (in progress)
+
+Semantic search over the last 24 hours of posts is being built behind `skystream.search.enabled`, which is off by default. It embeds text with [embeddinggemma-300m](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) through ONNX Runtime, in-process. Fetch the model (about 1.2 GB) once:
+
+```sh
+scripts/fetch-model.sh
+```
+
+The script writes the model's files, pinned to one revision, to `models/embeddinggemma-300m` (gitignored). Set `skystream.search.model-dir` if they live elsewhere. The embedder's tests check its vectors against the ones recorded in `src/test/resources/embedding-fixture.json`, and are skipped when the model hasn't been fetched. The model is released under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+
+PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
+
 ## External database
 
 Supply these Spring properties through configuration or environment variables:
