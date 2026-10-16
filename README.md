@@ -20,7 +20,7 @@ For a clean start, stop any running instance of the app and run:
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=clean-start
 ```
 
-The `clean-start` profile drops `bucket_word`, `word_bucket`, and `consumer_checkpoint`, then recreates them using `schema.sql` before ingestion starts. This deletes all stored word counts and checkpoint progress; Jetstream starts at the live tip. Use this command each time you want to reset the application tables.
+The `clean-start` profile drops `bucket_word`, `word_bucket`, `consumer_checkpoint`, and `search_post`, then recreates them using `schema.sql` before ingestion starts. This deletes all stored word counts, captured search posts, and checkpoint progress; Jetstream starts at the live tip. Use this command each time you want to reset the application tables.
 
 In another terminal:
 
@@ -99,5 +99,7 @@ spring.r2dbc.url=r2dbc:postgresql://your-host:5432/your-database
 spring.r2dbc.username=your-user
 spring.r2dbc.password=your-password
 ```
+
+The database needs the [pgvector](https://github.com/pgvector/pgvector) extension, version 0.7 or later, even with search disabled, because `schema.sql` creates the search table. Creating the extension needs a superuser, so run `CREATE EXTENSION vector;` once as one if the application's user isn't.
 
 Set `skystream.jetstream.enabled=false` to run HTTP/database functionality without upstream ingestion. Frontend setup is described in [its README](src/main/frontend/README.md).
