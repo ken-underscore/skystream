@@ -76,6 +76,13 @@ class PostRepositoryTests {
     }
 
     @Test
+    void captureDeletesBeforeInsertingSoARecreatedPostKeepsItsNewText() {
+        repository.capture(List.of(post("a", Duration.ZERO)), List.of()).block(timeout);
+        repository.capture(List.of(new SearchPost("a", "recreated text", now)), List.of("a")).block(timeout);
+        assertEquals("recreated text", repository.newestUnembedded(now.minusSeconds(60), 1).blockFirst(timeout).text());
+    }
+
+    @Test
     void captureRollsBackWithTheCallersTransaction() {
         repository.capture(List.of(post("b", Duration.ZERO)), List.of()).block(timeout);
         var transactions = TransactionalOperator.create(transactionManager);

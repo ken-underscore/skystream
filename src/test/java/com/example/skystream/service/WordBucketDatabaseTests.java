@@ -123,16 +123,22 @@ class WordBucketDatabaseTests {
         repository.saveBatch(next).block(timeout);
         repository.saveBatch(next).block(timeout);  // An unacknowledged retry is skipped entirely.
         assertEquals(List.of("at://a", "at://c"), searchPostUris());
+        assertEquals(Map.of("hello", 1L), combinedCounts(origin.plusSeconds(5), origin.plusSeconds(10)));
         assertEquals(9, repository.checkpoint().block(timeout).latestSeq());
     }
 
     @Test
-    void rejectedBatchSavesNoSearchPosts() {
-        var gap = new BucketBatch(99, 100, origin.plusSeconds(5), List.of(bucket(0, Map.of("hello", 1))),
-                List.of(new SearchPost("at://a", "orphan post", origin)), List.of());
-        StepVerifier.create(repository.saveBatch(gap))
-                .expectErrorMessage("Batch does not continue the persisted sequence; reload checkpoint").verify(timeout);
+    void failedCaptureRollsBackWordsAndCheckpointToo() {
+        // PostgreSQL's timestamps begin in 4713 BC, so capture fails after the words are written.
+        var failing = new BucketBatch(0, 5, origin.plusSeconds(5), List.of(bucket(0, Map.of("hello", 1))),
+                List.of(new SearchPost("at://a", "a post from 5001 BC", Instant.parse("-5000-01-01T00:00:00Z"))),
+                List.of());
+        StepVerifier.create(repository.saveBatch(failing)).expectError().verify(timeout);
+        Long headers = database.sql("SELECT COUNT(*) AS total FROM word_bucket")
+                .map((row, meta) -> row.get("total", Long.class)).one().block(timeout);
+        assertEquals(0L, headers);
         assertEquals(List.of(), searchPostUris());
+        assertEquals(0, repository.checkpoint().block(timeout).latestSeq());
     }
 
     @Test

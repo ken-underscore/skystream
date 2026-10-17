@@ -38,10 +38,15 @@ public class PostRepository {
     }
 
     /**
-     * Inserts new posts and deletes removed ones in the caller's transaction. Existing URIs are left unchanged. NUL
-     * characters are stripped: PostgreSQL rejects them in text, and one post must not fail the caller's batch.
+     * Deletes removed posts, then inserts new ones, in the caller's transaction. Deleting first lets a URI deleted
+     * and created again keep its new post; otherwise existing URIs are left unchanged. NUL characters are stripped:
+     * PostgreSQL rejects them in text, and one post must not fail the caller's batch.
      */
     public Mono<Void> capture(List<SearchPost> posts, List<String> deletedUris) {
+        Mono<Long> deleted = deletedUris.isEmpty() ? Mono.empty() : database.sql(
+                        "DELETE FROM search_post WHERE uri = ANY(CAST(:uris AS text[]))")
+                .bind("uris", deletedUris.toArray(String[]::new))
+                .fetch().rowsUpdated();
         Mono<Long> inserted = posts.isEmpty() ? Mono.empty() : database.sql("""
                 INSERT INTO search_post (uri, text, seen_at)
                 SELECT uri, text, to_timestamp(seen_us / 1e6)
@@ -53,11 +58,7 @@ public class PostRepository {
                 .bind("seen", posts.stream().map(post -> ChronoUnit.MICROS.between(Instant.EPOCH, post.seenAt()))
                         .toArray(Long[]::new))
                 .fetch().rowsUpdated();
-        Mono<Long> deleted = deletedUris.isEmpty() ? Mono.empty() : database.sql(
-                        "DELETE FROM search_post WHERE uri = ANY(CAST(:uris AS text[]))")
-                .bind("uris", deletedUris.toArray(String[]::new))
-                .fetch().rowsUpdated();
-        return inserted.then(deleted).then();
+        return deleted.then(inserted).then();
     }
 
     /** Deletes posts seen before the cutoff, embedded or not. */

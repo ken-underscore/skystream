@@ -18,7 +18,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
 class AggregatorServiceTests {
-    private final AggregatorService aggregator = new AggregatorService(true);
+    private final AggregatorService aggregator = new AggregatorService("true");
     private final Instant origin = Instant.parse("2026-10-04T12:00:00Z");
 
     private JetstreamCommit commit(long seq, double seconds, String text, String language) {
@@ -136,28 +136,34 @@ class AggregatorServiceTests {
                 commit(2, 1, "four words only here https://example.com", "en"),
                 commit(3, 2, "cinq mots en français ici", "fr"),
                 post(4, 3, "a reply with five words", "en", JsonNodeFactory.instance.objectNode()),
-                commit(5, 5, "next bucket flushes the batch", "en-US")), ConsumerCheckpoint.empty())
+                commit(5, 3, "\u00a0four words, not five", "en"),
+                commit(6, 4, "see https://example.com/a\u00a0the\u3000words after links", "en"),
+                commit(7, 5, "next bucket flushes the batch", "en-US")), ConsumerCheckpoint.empty())
                 .blockFirst(Duration.ofSeconds(5));
         assertEquals(List.of(new SearchPost(uri(1), "Finally did Sahale Arm yesterday", origin),
-                new SearchPost(uri(5), "next bucket flushes the batch", origin.plusSeconds(5))), batch.posts());
+                new SearchPost(uri(6), "see the words after links", origin.plusSeconds(4)),
+                new SearchPost(uri(7), "next bucket flushes the batch", origin.plusSeconds(5))), batch.posts());
         assertEquals(List.of(), batch.deletedUris());
     }
 
     @Test
-    void deleteCancelsACreateInTheSameBatchAndIsSavedOtherwise() {
+    void savesEveryDeleteAndOnlyPostsCreatedAfterTheirLastDelete() {
         var batch = aggregator.createWordBuckets(Flux.just(
                 commit(10, 0, "a post that is deleted right away", "en"),
                 delete(11, 1, 10),
-                delete(12, 2, 3),
-                commit(13, 5, "short", "en")), ConsumerCheckpoint.empty())
+                delete(12, 2, 13),
+                commit(13, 3, "a post created again after its delete", "en"),
+                delete(14, 4, 3),
+                commit(15, 5, "short", "en")), ConsumerCheckpoint.empty())
                 .blockFirst(Duration.ofSeconds(5));
-        assertEquals(List.of(), batch.posts());
-        assertEquals(List.of(uri(3)), batch.deletedUris());
+        assertEquals(List.of(new SearchPost(uri(13), "a post created again after its delete", origin.plusSeconds(3))),
+                batch.posts());
+        assertEquals(List.of(uri(10), uri(13), uri(3)), batch.deletedUris());
     }
 
     @Test
     void capturesNothingWhileSearchIsDisabled() {
-        var batch = new AggregatorService(false).createWordBuckets(Flux.just(
+        var batch = new AggregatorService("false").createWordBuckets(Flux.just(
                 commit(1, 0, "a post with five whole words", "en"),
                 delete(2, 1, 0),
                 commit(3, 5, "another post with five words", "en")), ConsumerCheckpoint.empty())

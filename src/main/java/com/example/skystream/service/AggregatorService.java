@@ -37,8 +37,9 @@ public class AggregatorService {
     // Search posts are captured only when search is enabled; otherwise nothing would expire or embed them.
     private final boolean captureSearchPosts;
 
-    public AggregatorService(@Value("${skystream.search.enabled:false}") boolean captureSearchPosts) {
-        this.captureSearchPosts = captureSearchPosts;
+    // Matches SearchConfiguration's @ConditionalOnProperty, which enables search only for "true".
+    public AggregatorService(@Value("${skystream.search.enabled:false}") String searchEnabled) {
+        this.captureSearchPosts = "true".equalsIgnoreCase(searchEnabled);
     }
 
     private static Set<String> loadStopWords() {
@@ -94,7 +95,7 @@ public class AggregatorService {
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
             Instant start = Instant.ofEpochSecond(Math.floorDiv(witnessedAt.getEpochSecond(), 5) * 5);
             addWords(commit, pending.computeIfAbsent(start, key -> new HashMap<>()));
-            if (captureSearchPosts) capture(commit);
+            if (captureSearchPosts) capture(commit, witnessedAt);
             latestProcessedSeq = commit.seq();
 
             if (maxBucketStart == null) {
@@ -117,17 +118,18 @@ public class AggregatorService {
             return batch;
         }
 
-        /** Applies creates and deletes in order, so a post created and deleted within one batch is never stored. */
-        private void capture(JetstreamCommit commit) {
+        /**
+         * Keeps the posts whose latest event in the batch is a create, and every deleted URI: deletes are saved
+         * before creates, so the stored posts match applying the events in order.
+         */
+        private void capture(JetstreamCommit commit, Instant witnessedAt) {
             if ("delete".equals(commit.operation())) {
                 String uri = SearchPost.uri(commit);
-                if (posts.remove(uri) == null) deletedUris.add(uri);
-                return;
+                posts.remove(uri);
+                deletedUris.add(uri);
+            } else {
+                SearchPost.from(commit, witnessedAt).ifPresent(post -> posts.put(post.uri(), post));
             }
-            SearchPost.from(commit).ifPresent(post -> {
-                deletedUris.remove(post.uri());
-                posts.put(post.uri(), post);
-            });
         }
     }
 
