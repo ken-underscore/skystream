@@ -95,7 +95,7 @@ public class AggregatorService {
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
             Instant start = Instant.ofEpochSecond(Math.floorDiv(witnessedAt.getEpochSecond(), 5) * 5);
             addWords(commit, pending.computeIfAbsent(start, key -> new HashMap<>()));
-            if (captureSearchPosts) capture(commit, witnessedAt);
+            if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
             latestProcessedSeq = commit.seq();
 
             if (maxBucketStart == null) {
@@ -122,7 +122,7 @@ public class AggregatorService {
          * Keeps the posts whose latest event in the batch is a create, and every deleted URI: deletes are saved
          * before creates, so the stored posts match applying the events in order.
          */
-        private void capture(JetstreamCommit commit, Instant witnessedAt) {
+        private void collectSearchPost(JetstreamCommit commit, Instant witnessedAt) {
             if ("delete".equals(commit.operation())) {
                 String uri = SearchPost.uri(commit);
                 posts.remove(uri);
