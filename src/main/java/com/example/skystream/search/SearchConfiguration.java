@@ -1,6 +1,7 @@
 package com.example.skystream.search;
 
 import java.nio.file.Path;
+import java.time.Duration;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -20,5 +21,10 @@ public class SearchConfiguration {
     @Bean
     PostExpiry postExpiry(PostRepository posts) {
         return new PostExpiry(posts);
+    }
+
+    @Bean
+    EmbeddingWorker embeddingWorker(PostRepository posts, Embedder embedder) {
+        return new EmbeddingWorker(posts, embedder, 256, Duration.ofSeconds(1));
     }
 }

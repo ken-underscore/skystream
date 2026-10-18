@@ -106,9 +106,9 @@ class PostRepositoryTests {
         var pending = repository.newestUnembedded(now.minus(Duration.ofHours(24)), 10).map(SearchPost::uri)
                 .collectList().block(timeout);
         assertEquals(List.of("minute", "hour"), pending);
-        var backlog = repository.backlog().block(timeout);
-        assertEquals(3, backlog.posts());
-        assertEquals(now.minus(Duration.ofHours(30)), backlog.oldestSeenAt());
+        var backlog = repository.backlog(now.minus(Duration.ofHours(24))).block(timeout);
+        assertEquals(2, backlog.posts());
+        assertEquals(now.minus(Duration.ofHours(1)), backlog.oldestSeenAt());
     }
 
     @Test
@@ -132,6 +132,6 @@ class PostRepositoryTests {
         assertEquals(2L, repository.expire(now.minus(Duration.ofHours(24))).block(timeout));
         assertEquals(List.of("recent"), uris());
         assertNull(repository.nearest(vector(1), 10).blockFirst(timeout));
-        assertEquals(1, repository.backlog().block(timeout).posts());
+        assertEquals(1, repository.backlog(now.minus(Duration.ofHours(24))).block(timeout).posts());
     }
 }

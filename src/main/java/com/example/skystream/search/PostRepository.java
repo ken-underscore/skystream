@@ -108,9 +108,13 @@ public class PostRepository {
                 .all();
     }
 
-    /** How many posts are waiting for an embedding, and when the oldest of them was seen. */
-    public Mono<Backlog> backlog() {
-        return database.sql("SELECT COUNT(*) AS posts, MIN(seen_at) AS oldest FROM search_post WHERE embedding IS NULL")
+    /** How many posts seen at or after {@code since} are waiting for an embedding, and when the oldest was seen. */
+    public Mono<Backlog> backlog(Instant since) {
+        return database.sql("""
+                SELECT COUNT(*) AS posts, MIN(seen_at) AS oldest FROM search_post
+                WHERE embedding IS NULL AND seen_at >= :since
+                """)
+                .bind("since", since.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> {
                     OffsetDateTime oldest = row.get("oldest", OffsetDateTime.class);
                     return new Backlog(row.get("posts", Long.class), oldest == null ? null : oldest.toInstant());
