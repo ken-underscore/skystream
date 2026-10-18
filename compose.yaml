@@ -2,6 +2,9 @@ services:
   postgres-db:
     image: pgvector/pgvector:pg17
     container_name: skystream_postgres_local
+    labels:
+      # Spring Boot recognizes the postgres image by name, but not pgvector's.
+      org.springframework.boot.service-connection: postgres
     environment:
       POSTGRES_USER: local_user
       POSTGRES_PASSWORD: local_password
