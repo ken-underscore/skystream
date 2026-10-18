@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.stream.IntStream;
 
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
@@ -53,13 +54,18 @@ public class GemmaEmbedder implements Embedder, AutoCloseable {
         }
     }
 
-    /** Batches texts of similar length together, which cuts padding work, and returns vectors in input order. */
+    /**
+     * Batches texts of similar length together, which cuts padding work, and returns vectors in input order. Stops
+     * between batches if the thread is interrupted.
+     */
     @Override
     public float[][] embedDocuments(List<String> texts) {
         int[] byLength = IntStream.range(0, texts.size()).boxed()
                 .sorted(Comparator.comparingInt(i -> texts.get(i).length())).mapToInt(Integer::intValue).toArray();
         var vectors = new float[texts.size()][];
         for (int start = 0; start < byLength.length; start += BATCH) {
+            // A run can't be interrupted, so an interrupt is honored between runs instead.
+            if (Thread.currentThread().isInterrupted()) throw new CancellationException("Interrupted while embedding");
             int[] batch = Arrays.copyOfRange(byLength, start, Math.min(start + BATCH, byLength.length));
             float[][] embedded = run(IntStream.of(batch).mapToObj(i -> DOCUMENT_PREFIX + texts.get(i)).toList());
             for (int i = 0; i < batch.length; i++) vectors[batch[i]] = embedded[i];

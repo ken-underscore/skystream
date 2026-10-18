@@ -2,11 +2,13 @@ package com.example.skystream.search;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.AfterAll;
@@ -62,6 +64,16 @@ class GemmaEmbedderTests {
         }
         for (int i = 0; i < queries.size(); i++) {
             assertArrayEquals(queryIds.get(i), embedder.tokenize(GemmaEmbedder.QUERY_PREFIX + queries.get(i)), queries.get(i));
+        }
+    }
+
+    @Test
+    void embedDocumentsStopsWhenInterrupted() {
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(CancellationException.class, () -> embedder.embedDocuments(documents));
+        } finally {
+            Thread.interrupted();
         }
     }
 
