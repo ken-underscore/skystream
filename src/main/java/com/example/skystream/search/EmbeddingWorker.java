@@ -2,6 +2,7 @@ package com.example.skystream.search;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,20 +53,45 @@ class EmbeddingWorker implements AutoCloseable {
                 .subscribe();
     }
 
+    private record Embedded(Map<String, float[]> embeddings, List<String> failedUris) {}
+
     /** Embeds and saves the newest waiting posts, returning how many there were. */
     private Mono<Integer> embedNewest() {
         return posts.newestUnembedded(Instant.now().minus(PostRepository.RETENTION), batchSize).collectList()
                 .filter(batch -> !batch.isEmpty())
-                .flatMap(batch -> Mono.fromCallable(() -> embed(batch)).subscribeOn(embedding))
-                .flatMap(embeddings -> posts.saveEmbeddings(embeddings).thenReturn(embeddings.size()))
+                .flatMap(batch -> Mono.fromCallable(() -> embed(batch)).subscribeOn(embedding)
+                        .flatMap(embedded -> posts.saveEmbeddings(embedded.embeddings())
+                                .then(posts.markEmbeddingFailed(embedded.failedUris())))
+                        .thenReturn(batch.size()))
                 .defaultIfEmpty(0);
     }
 
-    private Map<String, float[]> embed(List<SearchPost> batch) {
-        float[][] vectors = embedder.embedDocuments(batch.stream().map(SearchPost::text).toList());
-        var embeddings = new HashMap<String, float[]>();
-        for (int i = 0; i < vectors.length; i++) embeddings.put(batch.get(i).uri(), vectors[i]);
-        return embeddings;
+    /**
+     * Embeds the batch, or if that fails, each post on its own, so one post that can't be embedded is marked failed
+     * instead of failing every batch it's in. If no post embeds on its own, the embedder is at fault, not the posts,
+     * so the failure is rethrown and the batch retried.
+     */
+    private Embedded embed(List<SearchPost> batch) {
+        try {
+            float[][] vectors = embedder.embedDocuments(batch.stream().map(SearchPost::text).toList());
+            var embeddings = new HashMap<String, float[]>();
+            for (int i = 0; i < vectors.length; i++) embeddings.put(batch.get(i).uri(), vectors[i]);
+            return new Embedded(embeddings, List.of());
+        } catch (RuntimeException batchFailure) {
+            var embeddings = new HashMap<String, float[]>();
+            var failedUris = new ArrayList<String>();
+            for (var post : batch) {
+                try {
+                    embeddings.put(post.uri(), embedder.embedDocuments(List.of(post.text()))[0]);
+                } catch (RuntimeException failure) {
+                    failedUris.add(post.uri());
+                }
+            }
+            if (embeddings.isEmpty()) throw batchFailure;
+            log.warn("Could not embed a batch of {} posts; {} failed on their own and are marked failed: {}",
+                    batch.size(), failedUris.size(), failedUris, batchFailure);
+            return new Embedded(embeddings, failedUris);
+        }
     }
 
     private static void logBacklog(PostRepository.Backlog backlog) {

@@ -53,7 +53,10 @@ class EmbeddingWorkerTests {
         database.sql("TRUNCATE search_post").fetch().rowsUpdated().block(timeout);
     }
 
-    /** Records each batch it embeds, failing the first {@code failures} batches and spending {@code busy} on each. */
+    /**
+     * Records each batch it embeds, spending {@code busy} on each. It fails the first {@code failures} batches, and
+     * every batch with a text containing "poison".
+     */
     private static final class FakeEmbedder implements Embedder {
         final List<List<String>> batches = new CopyOnWriteArrayList<>();
         final CountDownLatch started = new CountDownLatch(1);
@@ -73,7 +76,9 @@ class EmbeddingWorkerTests {
             // Spins rather than sleeping: like the model's native code, it ignores interrupts.
             long end = System.nanoTime() + busy.toNanos();
             while (System.nanoTime() < end) Thread.onSpinWait();
-            if (failures.getAndDecrement() > 0) throw new IllegalStateException("embedding failed");
+            if (failures.getAndDecrement() > 0 || texts.stream().anyMatch(text -> text.contains("poison"))) {
+                throw new IllegalStateException("embedding failed");
+            }
             finished.incrementAndGet();
             return texts.stream().map(text -> Arrays.copyOf(new float[]{1}, 768)).toArray(float[][]::new);
         }
@@ -97,6 +102,17 @@ class EmbeddingWorkerTests {
                 .filter(total -> total >= count)
                 .repeatWhenEmpty(repeat -> repeat.delayElements(Duration.ofMillis(50)))
                 .block(timeout);
+    }
+
+    private void awaitBatches(FakeEmbedder embedder, int count) {
+        Mono.fromSupplier(embedder.batches::size).filter(batches -> batches >= count)
+                .repeatWhenEmpty(repeat -> repeat.delayElements(Duration.ofMillis(50)))
+                .block(timeout);
+    }
+
+    private List<String> failedUris() {
+        return database.sql("SELECT uri FROM search_post WHERE embedding_failed ORDER BY uri")
+                .map((row, meta) -> row.get("uri", String.class)).all().collectList().block(timeout);
     }
 
     private List<String> unembeddedUris() {
@@ -128,6 +144,33 @@ class EmbeddingWorkerTests {
             awaitEmbedded(2);
         }
         assertEquals(List.of(List.of("text of 1"), List.of("text of 1"), List.of("text of 2")), embedder.batches);
+    }
+
+    @Test
+    void marksAPostThatFailsOnItsOwnAndEmbedsTheRest() {
+        capture("1", "poison", "3");
+        var embedder = new FakeEmbedder(0, Duration.ZERO);
+        try (var worker = new EmbeddingWorker(repository, embedder, 3, Duration.ofMillis(50))) {
+            awaitEmbedded(2);
+            capture("4");
+            awaitEmbedded(3);
+        }
+        assertEquals(List.of("poison"), failedUris());
+        assertEquals(List.of(List.of("text of 1", "text of poison", "text of 3"),
+                List.of("text of 1"), List.of("text of poison"), List.of("text of 3"),
+                List.of("text of 4")), embedder.batches);
+    }
+
+    @Test
+    void marksNothingWhenNoPostEmbedsOnItsOwn() {
+        capture("1", "2");
+        var embedder = new FakeEmbedder(Integer.MAX_VALUE, Duration.ZERO);
+        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50))) {
+            // Each attempt is the batch and then each post on its own: two attempts, so the batch was retried.
+            awaitBatches(embedder, 6);
+        }
+        assertEquals(List.of(), failedUris());
+        assertEquals(List.of("1", "2"), unembeddedUris());
     }
 
     @Test

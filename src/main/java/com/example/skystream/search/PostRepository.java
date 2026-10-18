@@ -68,11 +68,11 @@ public class PostRepository {
                 .fetch().rowsUpdated();
     }
 
-    /** The newest posts still waiting for an embedding, seen at or after {@code since}. */
+    /** The newest posts still waiting for an embedding, seen at or after {@code since}. Failed posts aren't waiting. */
     public Flux<SearchPost> newestUnembedded(Instant since, int limit) {
         return database.sql("""
                 SELECT uri, text, seen_at FROM search_post
-                WHERE embedding IS NULL AND seen_at >= :since
+                WHERE embedding IS NULL AND NOT embedding_failed AND seen_at >= :since
                 ORDER BY seen_at DESC LIMIT :limit
                 """)
                 .bind("since", since.atOffset(ZoneOffset.UTC))
@@ -95,6 +95,14 @@ public class PostRepository {
                 .fetch().rowsUpdated().then();
     }
 
+    /** Marks posts that failed to embed on their own, so they're no longer fetched as waiting. */
+    public Mono<Void> markEmbeddingFailed(List<String> uris) {
+        if (uris.isEmpty()) return Mono.empty();
+        return database.sql("UPDATE search_post SET embedding_failed = true WHERE uri = ANY(CAST(:uris AS text[]))")
+                .bind("uris", uris.toArray(String[]::new))
+                .fetch().rowsUpdated().then();
+    }
+
     /** The embedded posts nearest to {@code vector} by cosine similarity, most similar first. */
     public Flux<Hit> nearest(float[] vector, int limit) {
         return database.sql("""
@@ -112,7 +120,7 @@ public class PostRepository {
     public Mono<Backlog> backlog(Instant since) {
         return database.sql("""
                 SELECT COUNT(*) AS posts, MIN(seen_at) AS oldest FROM search_post
-                WHERE embedding IS NULL AND seen_at >= :since
+                WHERE embedding IS NULL AND NOT embedding_failed AND seen_at >= :since
                 """)
                 .bind("since", since.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> {

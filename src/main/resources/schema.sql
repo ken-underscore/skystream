@@ -27,11 +27,15 @@ CREATE TABLE IF NOT EXISTS search_post (
     text TEXT NOT NULL,
     -- Jetstream's time for the event, not the author-supplied createdAt.
     seen_at TIMESTAMPTZ NOT NULL,
-    embedding HALFVEC(768)
+    embedding HALFVEC(768),
+    -- Set when the post fails to embed on its own, so it's never fetched again and can't block the posts behind it.
+    embedding_failed BOOLEAN NOT NULL DEFAULT false
 );
 
--- Rows without an embedding are skipped by the HNSW index and found through the partial index.
+-- Rows without an embedding are skipped by the HNSW index. Those still waiting for one are found through the partial
+-- index.
 CREATE INDEX IF NOT EXISTS search_post_embedding_hnsw ON search_post USING hnsw (embedding halfvec_cosine_ops);
-CREATE INDEX IF NOT EXISTS search_post_unembedded ON search_post (seen_at DESC) WHERE embedding IS NULL;
+CREATE INDEX IF NOT EXISTS search_post_unembedded ON search_post (seen_at DESC)
+    WHERE embedding IS NULL AND NOT embedding_failed;
 -- Expiry deletes by age across all rows.
 CREATE INDEX IF NOT EXISTS search_post_seen_at ON search_post (seen_at);

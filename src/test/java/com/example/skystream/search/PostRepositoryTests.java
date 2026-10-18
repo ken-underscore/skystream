@@ -99,10 +99,12 @@ class PostRepositoryTests {
     }
 
     @Test
-    void newestUnembeddedSkipsEmbeddedPostsAndThoseOutsideTheWindow() {
+    void newestUnembeddedSkipsEmbeddedAndFailedPostsAndThoseOutsideTheWindow() {
         repository.capture(List.of(post("old", Duration.ofHours(30)), post("hour", Duration.ofHours(1)),
-                post("minute", Duration.ofMinutes(1)), post("embedded", Duration.ZERO)), List.of()).block(timeout);
+                post("failed", Duration.ofMinutes(2)), post("minute", Duration.ofMinutes(1)),
+                post("embedded", Duration.ZERO)), List.of()).block(timeout);
         repository.saveEmbeddings(Map.of("embedded", vector(1))).block(timeout);
+        repository.markEmbeddingFailed(List.of("failed")).block(timeout);
         var pending = repository.newestUnembedded(now.minus(Duration.ofHours(24)), 10).map(SearchPost::uri)
                 .collectList().block(timeout);
         assertEquals(List.of("minute", "hour"), pending);
