@@ -2,8 +2,8 @@ package com.example.skystream.search;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,13 +37,14 @@ class EmbeddingWorker implements AutoCloseable {
         this.embedder = embedder;
         this.batchSize = batchSize;
         work = Mono.defer(this::embedNewest)
-                .flatMap(embedded -> embedded < batchSize ? Mono.delay(idle).thenReturn(embedded) : Mono.just(embedded))
+                .flatMap(fetched -> fetched < batchSize ? Mono.delay(idle).thenReturn(fetched) : Mono.just(fetched))
                 .repeat()
                 .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(1)).maxBackoff(Duration.ofMinutes(1))
                         .transientErrors(true)
                         .doBeforeRetry(signal -> log.warn("Could not embed search posts; retrying", signal.failure())))
                 .subscribe();
-        backlogLog = Flux.interval(Duration.ofMinutes(1))
+        // A query slower than a minute skips the ticks it overlaps, rather than failing the interval.
+        backlogLog = Flux.interval(Duration.ofMinutes(1)).onBackpressureDrop()
                 .concatMap(tick -> posts.backlog(Instant.now().minus(PostRepository.RETENTION))
                         .doOnNext(EmbeddingWorker::logBacklog)
                         .onErrorResume(error -> {
@@ -79,18 +80,22 @@ class EmbeddingWorker implements AutoCloseable {
             return new Embedded(embeddings, List.of());
         } catch (RuntimeException batchFailure) {
             var embeddings = new HashMap<String, float[]>();
-            var failedUris = new ArrayList<String>();
+            var failures = new LinkedHashMap<String, RuntimeException>();
             for (var post : batch) {
+                // Closing interrupts this thread: stop, rather than embed the rest only for them to be discarded.
+                if (Thread.currentThread().isInterrupted()) throw batchFailure;
                 try {
                     embeddings.put(post.uri(), embedder.embedDocuments(List.of(post.text()))[0]);
                 } catch (RuntimeException failure) {
-                    failedUris.add(post.uri());
+                    failures.put(post.uri(), failure);
                 }
             }
             if (embeddings.isEmpty()) throw batchFailure;
-            log.warn("Could not embed a batch of {} posts; {} failed on their own and are marked failed: {}",
-                    batch.size(), failedUris.size(), failedUris, batchFailure);
-            return new Embedded(embeddings, failedUris);
+            // Attached only here: a broken embedder would otherwise log every post's failure on every retry.
+            failures.values().forEach(batchFailure::addSuppressed);
+            log.warn("Could not embed a batch of {} posts, so embedded them one at a time; marked {} failed: {}",
+                    batch.size(), failures.size(), failures.keySet(), batchFailure);
+            return new Embedded(embeddings, List.copyOf(failures.keySet()));
         }
     }
 

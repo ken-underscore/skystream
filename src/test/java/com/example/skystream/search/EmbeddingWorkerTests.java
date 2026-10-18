@@ -25,6 +25,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Testcontainers(disabledWithoutDocker = true)
@@ -135,15 +136,38 @@ class EmbeddingWorkerTests {
     }
 
     @Test
+    void waitsOnlyAfterABatchThatIsntFull() {
+        capture("1", "2", "3", "4");
+        var fetches = new AtomicInteger();
+        var counted = new PostRepository(database) {
+            @Override
+            public Flux<SearchPost> newestUnembedded(Instant since, int limit) {
+                fetches.incrementAndGet();
+                return super.newestUnembedded(since, limit);
+            }
+        };
+        try (var worker = new EmbeddingWorker(counted, new FakeEmbedder(0, Duration.ZERO), 2, Duration.ofMinutes(1))) {
+            awaitEmbedded(4);
+            // Long enough for a fetch that didn't wait to happen.
+            Mono.delay(Duration.ofMillis(200)).block();
+        }
+        // Two full batches fetched back to back, then an empty fetch that starts the minute's wait.
+        assertEquals(3, fetches.get());
+    }
+
+    @Test
     void retriesAFailedBatchAndKeepsWorking() {
         capture("1");
-        var embedder = new FakeEmbedder(1, Duration.ZERO);
+        // Fails the batch and then the post on its own, so nothing embeds and the batch itself is retried.
+        var embedder = new FakeEmbedder(2, Duration.ZERO);
         try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50))) {
             awaitEmbedded(1);
             capture("2");
             awaitEmbedded(2);
         }
-        assertEquals(List.of(List.of("text of 1"), List.of("text of 1"), List.of("text of 2")), embedder.batches);
+        assertEquals(List.of(), failedUris());
+        assertEquals(List.of(List.of("text of 1"), List.of("text of 1"), List.of("text of 1"), List.of("text of 2")),
+                embedder.batches);
     }
 
     @Test
@@ -181,5 +205,16 @@ class EmbeddingWorkerTests {
         assertTrue(embedder.started.await(timeout.toSeconds(), TimeUnit.SECONDS));
         worker.close();
         assertEquals(1, embedder.finished.get());
+    }
+
+    @Test
+    void closeStopsEmbeddingPostsOneAtATime() throws InterruptedException {
+        capture("1", "2", "3");
+        var embedder = new FakeEmbedder(Integer.MAX_VALUE, Duration.ofMillis(500));
+        var worker = new EmbeddingWorker(repository, embedder, 3, Duration.ofMillis(50));
+        assertTrue(embedder.started.await(timeout.toSeconds(), TimeUnit.SECONDS));
+        worker.close();
+        // Closed while the batch ran, so once it failed, no post was embedded on its own.
+        assertEquals(1, embedder.batches.size());
     }
 }
