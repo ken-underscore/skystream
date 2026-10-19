@@ -24,6 +24,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import reactor.core.publisher.Mono;
+
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {"spring.docker.compose.enabled=false", "skystream.jetstream.enabled=false"})
@@ -45,16 +47,19 @@ class SearchControllerTests {
     private final Instant seenAt = Instant.parse("2026-10-18T12:00:00Z");
     private final Duration timeout = Duration.ofSeconds(10);
     private final List<String> queries = new CopyOnWriteArrayList<>();
+    private final List<String> documents = new CopyOnWriteArrayList<>();
+    private volatile List<String> hypothetical = List.of();
     private WebTestClient client;
 
     @BeforeEach
     void setUp() {
         database.sql("TRUNCATE search_post").fetch().rowsUpdated().block(timeout);
-        // Every query embeds to the same vector, so the posts' vectors alone decide the order.
+        // Every query embeds to the same vector, and every hypothetical post to one at right angles to it.
         var embedder = new Embedder() {
             @Override
             public float[][] embedDocuments(List<String> texts) {
-                throw new UnsupportedOperationException();
+                documents.addAll(texts);
+                return texts.stream().map(text -> Arrays.copyOf(new float[]{0, 1}, 768)).toArray(float[][]::new);
             }
 
             @Override
@@ -63,7 +68,14 @@ class SearchControllerTests {
                 return Arrays.copyOf(new float[]{1, 0}, 768);
             }
         };
-        client = WebTestClient.bindToController(new SearchController(new SearchService(embedder, repository))).build();
+        var expander = new QueryExpander(null, Duration.ZERO) {
+            @Override
+            Mono<List<String>> expand(String query) {
+                return Mono.just(hypothetical);
+            }
+        };
+        client = WebTestClient.bindToController(new SearchController(new SearchService(embedder, repository, expander)))
+                .build();
     }
 
     private static String uri(String rkey) {
@@ -95,6 +107,29 @@ class SearchControllerTests {
                 .jsonPath("$[0].seenAt").isEqualTo("2026-10-18T12:00:00Z")
                 .jsonPath("$[0].similarity").value(Double.class, similarity -> assertEquals(1.0, similarity, 0.001));
         assertEquals(List.of("sore throat"), queries);
+    }
+
+    @Test
+    void searchesByTheMeanOfTheQueryAndItsHypotheticalPosts() {
+        // The query points at 0 degrees and its hypothetical post at 90, so their normalized mean points at 45. Alone,
+        // the query would rank the post at 0 first.
+        var embeddings = new HashMap<String, float[]>();
+        var posts = new ArrayList<SearchPost>();
+        for (int degrees : new int[]{0, 45, 80}) {
+            posts.add(new SearchPost(uri("at" + degrees), "at " + degrees, seenAt));
+            double angle = Math.toRadians(degrees);
+            embeddings.put(uri("at" + degrees), Arrays.copyOf(new float[]{(float) Math.cos(angle), (float) Math.sin(angle)}, 768));
+        }
+        repository.capture(posts, List.of()).block(timeout);
+        repository.saveEmbeddings(embeddings).block(timeout);
+        hypothetical = List.of("Did Rattlesnake Ledge today");
+
+        client.get().uri("/api/search?q={q}", "washington state hikes").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[*].text").isEqualTo(List.of("at 45", "at 80", "at 0"))
+                .jsonPath("$[0].similarity").value(Double.class, similarity -> assertEquals(1.0, similarity, 0.001));
+        assertEquals(hypothetical, documents);
     }
 
     @Test

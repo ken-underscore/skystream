@@ -89,7 +89,14 @@ The script writes the model's files, pinned to one revision, to `models/embeddin
 
 With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, to `search_post`, and posts older than 24 hours are deleted every 10 minutes. A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It logs the backlog every minute, as in `Embedding backlog: 12 posts, oldest seen 4s ago`, which measures how far embedding is behind ingestion.
 
-`GET /api/search?q=` embeds the query and returns the 10 embedded posts nearest it by cosine similarity, most similar first, as a JSON array:
+Search calls Claude, so with search enabled the app needs an [Anthropic API key](https://console.anthropic.com/) in the `ANTHROPIC_API_KEY` environment variable, and doesn't start without one. The key is never logged. For example, with the key in a `.env` file (gitignored):
+
+```sh
+set -a; . ./.env; set +a
+./mvnw spring-boot:run -Dspring-boot.run.arguments=--skystream.search.enabled=true
+```
+
+`GET /api/search?q=` first asks Claude Haiku (`claude-haiku-5-5`, thinking off) for three short hypothetical posts that would answer the query. It embeds the query and those posts, and returns the 10 embedded posts nearest their normalized mean by cosine similarity, most similar first. The posts let a query find matches by what they're about rather than the words they share: "washington state hikes" finds a post about Sahale Arm. Expansions are cached by query, ignoring case and spacing, for a day. If Haiku fails or takes longer than 5 seconds, the search uses the query alone. Results are a JSON array:
 
 ```json
 [{"text": "…", "seenAt": "2026-10-18T19:04:11.52Z", "url": "https://bsky.app/profile/did:plc:…/post/3m…", "similarity": 0.61}]

@@ -8,6 +8,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.anthropic.client.AnthropicClientAsync;
+import com.anthropic.client.okhttp.AnthropicOkHttpClientAsync;
+
 /** Semantic search is off unless enabled, so the app runs without the embedding model. */
 @Configuration
 @ConditionalOnProperty(name = "skystream.search.enabled", havingValue = "true")
@@ -23,9 +26,21 @@ public class SearchConfiguration {
         return new PostExpiry(posts);
     }
 
+    /** Every search calls Claude, so search doesn't start without a key. */
     @Bean
-    SearchService searchService(Embedder embedder, PostRepository posts) {
-        return new SearchService(embedder, posts);
+    AnthropicClientAsync anthropic(@Value("${ANTHROPIC_API_KEY:}") String apiKey) {
+        if (apiKey.isBlank()) throw new IllegalStateException("Search needs the ANTHROPIC_API_KEY environment variable");
+        return AnthropicOkHttpClientAsync.builder().apiKey(apiKey).build();
+    }
+
+    @Bean
+    QueryExpander queryExpander(AnthropicClientAsync anthropic) {
+        return new QueryExpander(anthropic, Duration.ofSeconds(5));
+    }
+
+    @Bean
+    SearchService searchService(Embedder embedder, PostRepository posts, QueryExpander expander) {
+        return new SearchService(embedder, posts, expander);
     }
 
     @Bean
