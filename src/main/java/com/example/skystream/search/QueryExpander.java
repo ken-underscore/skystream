@@ -22,7 +22,6 @@ import reactor.core.publisher.Mono;
  * falls back to the plain query.
  */
 class QueryExpander {
-    static final String MODEL = "claude-haiku-5-5";
     private static final int POSTS = 3;
     private static final String PROMPT = """
             You are the query-expansion step of a semantic search engine over recent Bluesky posts. Write %d short, \
@@ -48,7 +47,7 @@ class QueryExpander {
     Mono<List<String>> expand(String query) {
         // Concurrent searches for one query share a call. Failed calls aren't cached, and a call that outlasts the
         // timeout keeps running, so its posts are cached for the next search.
-        return Mono.fromFuture(cache.get(normalize(query), (key, executor) -> write(query)), true)
+        return Mono.fromFuture(() -> cache.get(normalize(query), (key, executor) -> write(query)), true)
                 .timeout(timeout)
                 .onErrorResume(error -> {
                     log.warn("Could not expand a query, so searching with it alone: {}", error.toString());
@@ -58,20 +57,23 @@ class QueryExpander {
 
     private CompletableFuture<List<String>> write(String query) {
         var params = MessageCreateParams.builder()
-                .model(MODEL)
+                .model(SearchConfiguration.HAIKU)
                 .maxTokens(2048)
                 // Thinking adds latency without improving the posts (log entry 14).
                 .thinking(ThinkingConfigDisabled.builder().build())
                 .outputConfig(Expansion.class)
                 .addUserMessage(PROMPT.formatted(POSTS, query))
                 .build();
-        return anthropic.messages().create(params).thenApply(message -> message.content().stream()
-                .flatMap(block -> block.text().stream())
-                .findFirst().orElseThrow(() -> new IllegalStateException("No text in a " + message.stopReason() + " reply"))
-                .text().posts().stream().filter(post -> !post.isBlank()).limit(POSTS).toList());
+        return anthropic.messages().create(params).thenApply(message -> {
+            Expansion expansion = message.content().stream().flatMap(block -> block.text().stream()).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("No text in a " + message.stopReason() + " reply"))
+                    .text();
+            return expansion.posts().stream().filter(post -> !post.isBlank()).limit(POSTS).toList();
+        });
     }
 
-    private static String normalize(String query) {
+    /** The query as cached: trimmed, lowercase, and with each run of whitespace a single space. */
+    static String normalize(String query) {
         return query.strip().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
     }
 }

@@ -15,6 +15,9 @@ import com.anthropic.client.okhttp.AnthropicOkHttpClientAsync;
 @Configuration
 @ConditionalOnProperty(name = "skystream.search.enabled", havingValue = "true")
 public class SearchConfiguration {
+    /** The model for query expansion and answers: fast and cheap, and good enough at both (log entry 14). */
+    static final String HAIKU = "claude-haiku-5-5";
+
     @Bean
     GemmaEmbedder embedder(@Value("${skystream.search.model-dir:models/embeddinggemma-300m}") Path modelDir,
             @Value("${skystream.search.threads:2}") int threads) {
@@ -26,11 +29,20 @@ public class SearchConfiguration {
         return new PostExpiry(posts);
     }
 
-    /** Every search calls Claude, so search doesn't start without a key. */
+    /**
+     * Every search calls Claude, so search doesn't start without a key. Surrounding whitespace, such as the {@code \r} a
+     * CRLF {@code .env} leaves, is removed, and a key with a space or control character inside is refused: the HTTP
+     * client would put it in the error it logs.
+     */
     @Bean
     AnthropicClientAsync anthropic(@Value("${ANTHROPIC_API_KEY:}") String apiKey) {
-        if (apiKey.isBlank()) throw new IllegalStateException("Search needs the ANTHROPIC_API_KEY environment variable");
-        return AnthropicOkHttpClientAsync.builder().apiKey(apiKey).build();
+        String key = apiKey.strip();
+        if (!key.matches("\\p{Graph}+")) {
+            throw new IllegalStateException(
+                    "Search needs ANTHROPIC_API_KEY set to a key, with no spaces or control characters");
+        }
+        // Bounds each call, retries included, well below the SDK's 10 minutes: a pending expansion holds its cache entry.
+        return AnthropicOkHttpClientAsync.builder().apiKey(key).timeout(Duration.ofSeconds(30)).build();
     }
 
     @Bean
