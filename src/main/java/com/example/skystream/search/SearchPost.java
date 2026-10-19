@@ -31,6 +31,12 @@ public record SearchPost(String uri, String text, Instant seenAt) {
                 : Optional.of(new SearchPost(uri(commit), String.join(" ", words), seenAt));
     }
 
+    /** The post's page on bsky.app, from its AT URI, {@code at://<did>/app.bsky.feed.post/<rkey>}. */
+    public String blueskyUrl() {
+        String[] parts = uri.substring("at://".length()).split("/");
+        return "https://bsky.app/profile/" + parts[0] + "/post/" + parts[2];
+    }
+
     /** The post's AT URI, which identifies it across creates and deletes. */
     public static String uri(JetstreamCommit commit) {
         return "at://" + commit.did() + "/" + commit.collection() + "/" + commit.rkey();

@@ -24,6 +24,11 @@ public class SearchConfiguration {
     }
 
     @Bean
+    SearchService searchService(Embedder embedder, PostRepository posts) {
+        return new SearchService(embedder, posts);
+    }
+
+    @Bean
     EmbeddingWorker embeddingWorker(PostRepository posts, Embedder embedder) {
         return new EmbeddingWorker(posts, embedder, 256, Duration.ofSeconds(1));
     }

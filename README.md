@@ -89,6 +89,14 @@ The script writes the model's files, pinned to one revision, to `models/embeddin
 
 With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, to `search_post`, and posts older than 24 hours are deleted every 10 minutes. A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It logs the backlog every minute, as in `Embedding backlog: 12 posts, oldest seen 4s ago`, which measures how far embedding is behind ingestion.
 
+`GET /api/search?q=` embeds the query and returns the 10 embedded posts nearest it by cosine similarity, most similar first, as a JSON array:
+
+```json
+[{"text": "…", "seenAt": "2026-10-18T19:04:11.52Z", "url": "https://bsky.app/profile/did:plc:…/post/3m…", "similarity": 0.61}]
+```
+
+`seenAt` is when Jetstream saw the post, and `url` its page on bsky.app. The query is trimmed and must be 1 to 200 characters, or the request returns HTTP 400. The endpoint exists only with search enabled. The frontend's search page, `search.html`, calls it.
+
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
 
 ## External database
