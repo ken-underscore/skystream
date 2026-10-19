@@ -13,11 +13,18 @@ const results = element('results');
 const answer = element('answer');
 const answerText = element('answer-text');
 // The form submits as a plain GET, so each search is its own page in history and can be shared as a link.
+const input = element('q') as HTMLInputElement;
 const query = new URLSearchParams(location.search).get('q')?.trim() ?? '';
-(element('q') as HTMLInputElement).value = query;
+input.value = query;
 if (query) search(query);
 
 function search(query: string) {
+  // A shared or edited link can carry a longer query than the input allows, and the server would refuse it.
+  if (query.length > input.maxLength) {
+    error.textContent = `Could not search: enter a search of at most ${input.maxLength} characters.`;
+    error.hidden = false;
+    return;
+  }
   status.textContent = 'Searching…';
   const source = new EventSource(`/api/search/stream?${new URLSearchParams({ q: query })}`);
   let found: SearchResult[] | undefined;
@@ -57,7 +64,7 @@ function search(query: string) {
       return;
     }
     answerText.replaceChildren(...citedParts(written, found?.length ?? 0).map(part => typeof part === 'string'
-      ? part : Object.assign(document.createElement('a'), { href: `#result-${part}`, textContent: `[${part}]` })));
+      ? part : citation(part)));
   });
   source.addEventListener('done', () => end());
   source.addEventListener('failed', () => end('Could not write an answer this time. The results above are unaffected.'));
@@ -65,6 +72,14 @@ function search(query: string) {
   source.addEventListener('error', () => found
     ? end('The answer stopped early.')
     : fail('the server didn’t answer. It may be down, or not have search enabled.'));
+}
+
+function citation(result: number): HTMLAnchorElement {
+  const link = document.createElement('a');
+  link.href = `#result-${result}`;
+  link.textContent = `[${result}]`;
+  link.setAttribute('aria-label', `Result ${result}`);
+  return link;
 }
 
 function render(result: SearchResult, index: number): HTMLLIElement {

@@ -71,6 +71,7 @@ class SearchControllerTests {
 
             @Override
             public float[] embedQuery(String query) {
+                if (query.equals("unembeddable")) throw new IllegalStateException("embedding failed");
                 queries.add(query);
                 return Arrays.copyOf(new float[]{1, 0}, 768);
             }
@@ -182,6 +183,15 @@ class SearchControllerTests {
         answer = Flux.just("Hikers ").concatWith(Flux.error(new IllegalStateException("Haiku declined to answer")));
         assertEquals(List.of("results", "answer", "failed"),
                 stream("washington state hikes").stream().map(ServerSentEvent::event).toList());
+    }
+
+    @Test
+    void streamRejectsABadQueryAndFailsWithoutEventsWhenTheSearchFails() {
+        client.get().uri("/api/search/stream?q={q}", " ").accept(MediaType.TEXT_EVENT_STREAM).exchange()
+                .expectStatus().isBadRequest();
+        client.get().uri("/api/search/stream?q={q}", "unembeddable").accept(MediaType.TEXT_EVENT_STREAM).exchange()
+                .expectStatus().is5xxServerError();
+        assertEquals(List.of(), answered);
     }
 
     @Test

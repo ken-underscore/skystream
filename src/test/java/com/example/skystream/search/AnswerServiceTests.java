@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,6 +60,17 @@ class AnswerServiceTests {
     }
 
     @Test
+    void streamsEachPieceAsItArrivesAndClosesTheCallWhenNoLongerWanted() throws InterruptedException {
+        api.body = FakeMessagesApi.streamed("end_turn", "one ", "two ", "three ", "four ", "five");
+        api.pieceDelay = Duration.ofMillis(300);
+        long start = System.nanoTime();
+        assertEquals("one ", answers.answer("hikes", POSTS).blockFirst(Duration.ofSeconds(10)));
+        // The whole reply takes 3 s: the first piece came well before that, and taking only it hung up the call.
+        assertTrue(Duration.ofNanos(System.nanoTime() - start).compareTo(Duration.ofMillis(1500)) < 0);
+        assertTrue(api.hungUp.await(5, TimeUnit.SECONDS));
+    }
+
+    @Test
     void reusesTheAnswerForTheSameNormalizedQueryAndPosts() {
         answer("washington state hikes", POSTS);
         assertEquals(List.of("Hikers loved Sahale Arm [1]."), answer("Washington State  hikes", POSTS));
@@ -75,15 +87,17 @@ class AnswerServiceTests {
     }
 
     @Test
-    void failsWhenHaikuRefusesOrErrorsAndCachesNeither() {
+    void failsWhenHaikuRefusesStopsShortOrErrorsAndCachesNone() {
         api.body = FakeMessagesApi.streamed("refusal");
+        assertThrows(IllegalStateException.class, () -> answer("washington state hikes", POSTS));
+        api.body = FakeMessagesApi.streamed("max_tokens", "Cut off mid");
         assertThrows(IllegalStateException.class, () -> answer("washington state hikes", POSTS));
         api.status = 400;
         assertThrows(RuntimeException.class, () -> answer("washington state hikes", POSTS));
         api.status = 200;
         api.body = FakeMessagesApi.streamed("end_turn", "Fine.");
         assertEquals(List.of("Fine."), answer("washington state hikes", POSTS));
-        assertEquals(3, api.requests.size());
+        assertEquals(4, api.requests.size());
     }
 
     @Test

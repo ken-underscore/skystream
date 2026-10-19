@@ -17,7 +17,6 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 
 /**
  * Streams Haiku's answer to a query from the posts found for it, citing them by number. The posts are strangers'
@@ -33,7 +32,9 @@ class AnswerService {
 
     private final AnthropicClientAsync anthropic;
     private final Duration timeout;
-    private final Cache<String, String> cache = Caffeine.newBuilder()
+    private record Key(String query, List<String> uris) {}
+
+    private final Cache<Key, String> cache = Caffeine.newBuilder()
             .maximumSize(10_000).expireAfterWrite(Duration.ofDays(1)).build();
 
     /** Fails a stream that goes {@code timeout} without its next piece of text. */
@@ -45,14 +46,16 @@ class AnswerService {
     /** The answer as it's written, or nothing when there are no posts to answer from. */
     Flux<String> answer(String query, List<SearchPost> posts) {
         if (posts.isEmpty()) return Flux.empty();
-        String key = QueryExpander.normalize(query) + posts.stream().map(post -> "\n" + post.uri()).collect(joining());
+        var key = new Key(QueryExpander.normalize(query), posts.stream().map(SearchPost::uri).toList());
         String cached = cache.getIfPresent(key);
         if (cached != null) return Flux.just(cached);
         return Flux.defer(() -> {
             var answer = new StringBuilder();
             return stream(params(query, posts)).timeout(timeout)
                     .doOnNext(answer::append)
-                    .doOnComplete(() -> cache.put(key, answer.toString()));
+                    .doOnComplete(() -> {
+                        if (!answer.isEmpty()) cache.put(key, answer.toString());
+                    });
         });
     }
 
@@ -84,9 +87,10 @@ class AnswerService {
                 public void onNext(RawMessageStreamEvent event) {
                     event.contentBlockDelta().flatMap(block -> block.delta().text())
                             .ifPresent(text -> sink.next(text.text()));
+                    // A refusal, or an answer cut off at max_tokens, isn't one to show or cache.
                     event.messageDelta().flatMap(message -> message.delta().stopReason())
-                            .filter(StopReason.REFUSAL::equals)
-                            .ifPresent(refusal -> sink.error(new IllegalStateException("Haiku declined to answer")));
+                            .filter(reason -> !StopReason.END_TURN.equals(reason))
+                            .ifPresent(reason -> sink.error(new IllegalStateException("The answer stopped: " + reason)));
                 }
 
                 @Override
@@ -94,6 +98,6 @@ class AnswerService {
                     error.ifPresentOrElse(sink::error, sink::complete);
                 }
             });
-        }, FluxSink.OverflowStrategy.BUFFER);
+        });
     }
 }

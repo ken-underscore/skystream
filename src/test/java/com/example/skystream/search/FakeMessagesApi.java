@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 
 import com.anthropic.client.AnthropicClientAsync;
 import com.anthropic.client.okhttp.AnthropicOkHttpClientAsync;
@@ -17,7 +18,8 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * A local stand-in for the Messages API, so tests run the real SDK without any request leaving the machine. It records
- * each request and answers with the configured status, content type and body, after the configured delay.
+ * each request and answers with the configured status, content type and body, after the configured delay. With a
+ * piece delay, it sends a streamed body one event at a time, and notes when the client has hung up.
  */
 class FakeMessagesApi implements AutoCloseable {
     static final String ERROR = """
@@ -28,6 +30,8 @@ class FakeMessagesApi implements AutoCloseable {
     volatile String contentType = "application/json";
     volatile String body = "";
     volatile Duration delay = Duration.ZERO;
+    volatile Duration pieceDelay = Duration.ZERO;
+    final CountDownLatch hungUp = new CountDownLatch(1);
     final AnthropicClientAsync client;
     private final HttpServer server;
 
@@ -65,16 +69,33 @@ class FakeMessagesApi implements AutoCloseable {
 
     private void answer(HttpExchange exchange) throws IOException {
         requests.add(new ObjectMapper().readTree(exchange.getRequestBody()));
-        try {
-            Thread.sleep(delay);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        pause(delay);
+        exchange.getResponseHeaders().add("Content-Type", status == 200 ? contentType : "application/json");
+        if (status == 200 && !pieceDelay.isZero()) {
+            exchange.sendResponseHeaders(status, 0);
+            try (var out = exchange.getResponseBody()) {
+                for (String event : body.split("(?<=\n\n)")) {
+                    out.write(event.getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    pause(pieceDelay);
+                }
+            } catch (IOException hangUp) {
+                hungUp.countDown();
+            }
+            return;
         }
         byte[] reply = (status == 200 ? body : ERROR).getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", status == 200 ? contentType : "application/json");
         exchange.sendResponseHeaders(status, reply.length);
         exchange.getResponseBody().write(reply);
         exchange.close();
+    }
+
+    private static void pause(Duration duration) {
+        try {
+            Thread.sleep(duration);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
