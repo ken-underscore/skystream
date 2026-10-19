@@ -5,8 +5,10 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -14,12 +16,14 @@ import java.util.TreeMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
 import com.example.skystream.model.WordBucket;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
+import com.example.skystream.search.SearchPost;
 
 import dto.JetstreamCommit;
 import reactor.core.publisher.Flux;
@@ -29,6 +33,14 @@ public class AggregatorService {
     private static final Pattern TOKENS = Pattern.compile("\\p{L}+(?:'\\p{L}+)*|\\p{Nd}+");
     private static final Pattern VALID_WORD = Pattern.compile("[a-z]+(?:'[a-z]+)*|[0-9]+");
     private static final Set<String> STOP_WORDS = loadStopWords();
+
+    // Search posts are captured only when search is enabled; otherwise nothing would expire or embed them.
+    private final boolean captureSearchPosts;
+
+    // Matches SearchConfiguration's @ConditionalOnProperty, which enables search only for "true".
+    public AggregatorService(@Value("${skystream.search.enabled:false}") String searchEnabled) {
+        this.captureSearchPosts = "true".equalsIgnoreCase(searchEnabled);
+    }
 
     private static Set<String> loadStopWords() {
         var resource = new ClassPathResource("stopwords/english.txt");
@@ -59,6 +71,8 @@ public class AggregatorService {
 
     private final class BucketAccumulator {
         private final TreeMap<Instant, Map<String, Integer>> pending = new TreeMap<>();
+        private final Map<String, SearchPost> posts = new LinkedHashMap<>();
+        private final Set<String> deletedUris = new LinkedHashSet<>();
         private long latestProcessedSeq;
         private long latestFlushedSeq;
         private Instant maxBucketStart;
@@ -81,6 +95,7 @@ public class AggregatorService {
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
             Instant start = Instant.ofEpochSecond(Math.floorDiv(witnessedAt.getEpochSecond(), 5) * 5);
             addWords(commit, pending.computeIfAbsent(start, key -> new HashMap<>()));
+            if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
             latestProcessedSeq = commit.seq();
 
             if (maxBucketStart == null) {
@@ -94,18 +109,33 @@ public class AggregatorService {
             // Include the triggering event: nothing through latestSeq is left only in memory.
             var buckets = pending.entrySet().stream()
                     .map(entry -> new WordBucket(entry.getKey(), entry.getValue())).toList();
-            BucketBatch batch = new BucketBatch(latestFlushedSeq, latestProcessedSeq, maxBucketStart, buckets);
+            BucketBatch batch = new BucketBatch(latestFlushedSeq, latestProcessedSeq, maxBucketStart, buckets,
+                    List.copyOf(posts.values()), List.copyOf(deletedUris));
             pending.clear();
+            posts.clear();
+            deletedUris.clear();
             latestFlushedSeq = latestProcessedSeq;
             return batch;
+        }
+
+        /**
+         * Keeps the posts whose latest event in the batch is a create, and every deleted URI: deletes are saved
+         * before creates, so the stored posts match applying the events in order.
+         */
+        private void collectSearchPost(JetstreamCommit commit, Instant witnessedAt) {
+            if ("delete".equals(commit.operation())) {
+                String uri = SearchPost.uri(commit);
+                posts.remove(uri);
+                deletedUris.add(uri);
+            } else {
+                SearchPost.from(commit, witnessedAt).ifPresent(post -> posts.put(post.uri(), post));
+            }
         }
     }
 
     private void addWords(JetstreamCommit commit, Map<String, Integer> words) {
         var record = commit.record();
-        if (!"create".equals(commit.operation()) || record == null || record.text() == null
-                || record.langs() == null || Arrays.stream(record.langs()).noneMatch(
-                        lang -> lang != null && lang.toLowerCase(Locale.ROOT).startsWith("en"))) {
+        if (!"create".equals(commit.operation()) || record == null || record.text() == null || !record.isEnglish()) {
             return;
         }
         String noURLs = record.text().replaceAll("https?://\\S+", "");

@@ -18,6 +18,7 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordBucket;
+import com.example.skystream.search.PostRepository;
 
 import io.r2dbc.spi.Row;
 import reactor.core.publisher.Flux;
@@ -37,10 +38,12 @@ public class WordBucketRepository {
             Comparator.comparingLong(WindowCount::count).reversed().thenComparing(WindowCount::word);
 
     private final DatabaseClient database;
+    private final PostRepository posts;
     private final TransactionalOperator transactions;
 
-    public WordBucketRepository(DatabaseClient database, ReactiveTransactionManager transactionManager) {
+    public WordBucketRepository(DatabaseClient database, PostRepository posts, ReactiveTransactionManager transactionManager) {
         this.database = database;
+        this.posts = posts;
         this.transactions = TransactionalOperator.create(transactionManager);
     }
 
@@ -60,7 +63,7 @@ public class WordBucketRepository {
                 maxStart == null ? null : maxStart.toInstant());
     }
 
-    /** Atomically adds all contributions and advances the sequence, returning only after commit. */
+    /** Atomically adds all contributions and captured search posts and advances the sequence, returning only after commit. */
     public Mono<ConsumerCheckpoint> saveBatch(BucketBatch batch) {
         return Mono.defer(() -> {
             Mono<ConsumerCheckpoint> writes = readCheckpoint(true).flatMap(current -> {
@@ -71,7 +74,8 @@ public class WordBucketRepository {
                 if (batch.previousSeq() != current.latestSeq()) {
                     return Mono.error(new IllegalStateException("Batch does not continue the persisted sequence; reload checkpoint"));
                 }
-                return Flux.fromIterable(batch.buckets()).concatMap(this::addBucket).then(
+                return Flux.fromIterable(batch.buckets()).concatMap(this::addBucket)
+                        .then(posts.capture(batch.posts(), batch.deletedUris())).then(
                         database.sql("""
                                 UPDATE consumer_checkpoint
                                 SET latest_seq = :seq, max_bucket_started_at = :maxStart

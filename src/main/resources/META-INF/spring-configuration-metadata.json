@@ -6,6 +6,27 @@
       "description": "Whether to connect to Jetstream and ingest commits when the application starts.",
       "defaultValue": true,
       "sourceType": "com.example.skystream.service.JetstreamConsumer"
+    },
+    {
+      "name": "skystream.search.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether to enable semantic search, which needs the embedding model in skystream.search.model-dir.",
+      "defaultValue": false,
+      "sourceType": "com.example.skystream.search.SearchConfiguration"
+    },
+    {
+      "name": "skystream.search.model-dir",
+      "type": "java.lang.String",
+      "description": "Directory with embeddinggemma-300m's tokenizer.json and onnx/model.onnx (+ model.onnx_data), as fetched by scripts/fetch-model.sh.",
+      "defaultValue": "models/embeddinggemma-300m",
+      "sourceType": "com.example.skystream.search.SearchConfiguration"
+    },
+    {
+      "name": "skystream.search.threads",
+      "type": "java.lang.Integer",
+      "description": "CPU threads the embedding model may use.",
+      "defaultValue": 2,
+      "sourceType": "com.example.skystream.search.SearchConfiguration"
     }
   ]
 }

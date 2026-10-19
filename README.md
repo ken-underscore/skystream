@@ -20,7 +20,7 @@ For a clean start, stop any running instance of the app and run:
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=clean-start
 ```
 
-The `clean-start` profile drops `bucket_word`, `word_bucket`, and `consumer_checkpoint`, then recreates them using `schema.sql` before ingestion starts. This deletes all stored word counts and checkpoint progress; Jetstream starts at the live tip. Use this command each time you want to reset the application tables.
+The `clean-start` profile drops `bucket_word`, `word_bucket`, `consumer_checkpoint`, and `search_post`, then recreates them using `schema.sql` before ingestion starts. This deletes all stored word counts, captured search posts, and checkpoint progress; Jetstream starts at the live tip. Use this command each time you want to reset the application tables.
 
 In another terminal:
 
@@ -55,7 +55,7 @@ For example, events 100 and 101 at `:01` and `:02`, followed by event 102 at `:0
 
 `word_bucket` uses `started_at` as its primary key. The end is always start plus five seconds; no run ID or end column is stored. `bucket_word` stores additive counts keyed by bucket start and word.
 
-The singleton `consumer_checkpoint` stores the latest persisted sequence and greatest observed bucket start. `WordBucketRepository.saveBatch` locks this row and writes all bucket increments and checkpoint progress in one transaction. A repeated batch already covered by the checkpoint does nothing. A batch whose preceding sequence differs from the checkpoint is rejected rather than risking duplicate contributions.
+The singleton `consumer_checkpoint` stores the latest persisted sequence and greatest observed bucket start. `WordBucketRepository.saveBatch` locks this row and writes all bucket increments and checkpoint progress in one transaction. When search is enabled, the same transaction saves the batch's captured posts and deletes to `search_post`. A repeated batch already covered by the checkpoint does nothing. A batch whose preceding sequence differs from the checkpoint is rejected rather than risking duplicate contributions.
 
 Persistence is sequential with no prefetch. Transient database errors get up to three retries with backoff. The repository returns its result only after the transaction commits.
 
@@ -77,6 +77,20 @@ The first available cached snapshot is sent immediately on each connection, incl
 
 Spring Boot initializes `schema.sql` before the repository is used. Repeated startups preserve existing counts and checkpoint progress.
 
+## Semantic search (in progress)
+
+Semantic search over the last 24 hours of posts is being built behind `skystream.search.enabled`, which is off by default. It embeds text with [embeddinggemma-300m](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) through ONNX Runtime, in-process. Fetch the model (about 1.2 GB) once:
+
+```sh
+scripts/fetch-model.sh
+```
+
+The script writes the model's files, pinned to one revision, to `models/embeddinggemma-300m` (gitignored). Set `skystream.search.model-dir` if they live elsewhere. The embedder's tests check its vectors against the ones recorded in `src/test/resources/embedding-fixture.json`, and are skipped when the model hasn't been fetched. The model is released under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+
+With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, to `search_post`, and posts older than 24 hours are deleted every 10 minutes. A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It logs the backlog every minute, as in `Embedding backlog: 12 posts, oldest seen 4s ago`, which measures how far embedding is behind ingestion.
+
+PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
+
 ## External database
 
 Supply these Spring properties through configuration or environment variables:
@@ -87,5 +101,7 @@ spring.r2dbc.url=r2dbc:postgresql://your-host:5432/your-database
 spring.r2dbc.username=your-user
 spring.r2dbc.password=your-password
 ```
+
+The database needs the [pgvector](https://github.com/pgvector/pgvector) extension, version 0.7 or later, even with search disabled, because `schema.sql` creates the search table. Creating the extension needs a superuser, so run `CREATE EXTENSION vector;` once as one if the application's user isn't.
 
 Set `skystream.jetstream.enabled=false` to run HTTP/database functionality without upstream ingestion. Frontend setup is described in [its README](src/main/frontend/README.md).

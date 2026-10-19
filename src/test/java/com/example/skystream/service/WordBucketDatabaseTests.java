@@ -31,11 +31,13 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordBucket;
 import com.example.skystream.repository.WordBucketRepository;
+import com.example.skystream.search.SearchPost;
 import com.example.skystream.SkystreamApplication;
 import dto.JetstreamCommit;
 import dto.PostRecord;
@@ -48,7 +50,8 @@ import reactor.test.StepVerifier;
         properties = {"spring.docker.compose.enabled=false", "skystream.jetstream.enabled=false"})
 class WordBucketDatabaseTests {
     @Container
-    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine");
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer(
+            DockerImageName.parse("pgvector/pgvector:pg17").asCompatibleSubstituteFor("postgres"));
 
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry properties) {
@@ -67,7 +70,7 @@ class WordBucketDatabaseTests {
     private final Duration timeout = Duration.ofSeconds(10);
 
     private BucketBatch batch(long previous, long seq, int maxSecond, WordBucket... buckets) {
-        return new BucketBatch(previous, seq, origin.plusSeconds(maxSecond), List.of(buckets));
+        return new BucketBatch(previous, seq, origin.plusSeconds(maxSecond), List.of(buckets), List.of(), List.of());
     }
 
     private WordBucket bucket(int second, Map<String, Integer> counts) {
@@ -78,7 +81,7 @@ class WordBucketDatabaseTests {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
                 "2020-01-01T00:00:00Z", origin.plusSeconds(second).toString(), "rev", "create",
                 "app.bsky.feed.post", "key" + seq, "cid" + seq,
-                new PostRecord("app.bsky.feed.post", text, origin.toString(), new String[]{"en"}));
+                new PostRecord("app.bsky.feed.post", text, origin.toString(), new String[]{"en"}, null));
     }
 
     private Map<String, Long> awaitSnapshot(Map<String, Long> expected) {
@@ -100,9 +103,42 @@ class WordBucketDatabaseTests {
 
     @BeforeEach
     void clearDatabase() {
-        database.sql("TRUNCATE word_bucket CASCADE").fetch().rowsUpdated()
+        database.sql("TRUNCATE word_bucket, search_post CASCADE").fetch().rowsUpdated()
                 .then(database.sql("UPDATE consumer_checkpoint SET latest_seq = 0, max_bucket_started_at = NULL WHERE id = 1")
                         .fetch().rowsUpdated()).block(timeout);
+    }
+
+    private List<String> searchPostUris() {
+        return database.sql("SELECT uri FROM search_post ORDER BY uri").map((row, metadata) -> row.get("uri", String.class))
+                .all().collectList().block(timeout);
+    }
+
+    @Test
+    void searchPostsAreSavedWithTheCheckpointAndOnlyOnce() {
+        repository.saveBatch(new BucketBatch(0, 5, origin.plusSeconds(5), List.of(bucket(0, Map.of("hello", 1))),
+                List.of(new SearchPost("at://a", "first post", origin), new SearchPost("at://b", "second post", origin)),
+                List.of())).block(timeout);
+        var next = new BucketBatch(5, 9, origin.plusSeconds(10), List.of(bucket(5, Map.of("hello", 1))),
+                List.of(new SearchPost("at://c", "third post", origin)), List.of("at://b"));
+        repository.saveBatch(next).block(timeout);
+        repository.saveBatch(next).block(timeout);  // An unacknowledged retry is skipped entirely.
+        assertEquals(List.of("at://a", "at://c"), searchPostUris());
+        assertEquals(Map.of("hello", 1L), combinedCounts(origin.plusSeconds(5), origin.plusSeconds(10)));
+        assertEquals(9, repository.checkpoint().block(timeout).latestSeq());
+    }
+
+    @Test
+    void failedCaptureRollsBackWordsAndCheckpointToo() {
+        // PostgreSQL's timestamps begin in 4713 BC, so capture fails after the words are written.
+        var failing = new BucketBatch(0, 5, origin.plusSeconds(5), List.of(bucket(0, Map.of("hello", 1))),
+                List.of(new SearchPost("at://a", "a post from 5001 BC", Instant.parse("-5000-01-01T00:00:00Z"))),
+                List.of());
+        StepVerifier.create(repository.saveBatch(failing)).expectError().verify(timeout);
+        Long headers = database.sql("SELECT COUNT(*) AS total FROM word_bucket")
+                .map((row, meta) -> row.get("total", Long.class)).one().block(timeout);
+        assertEquals(0L, headers);
+        assertEquals(List.of(), searchPostUris());
+        assertEquals(0, repository.checkpoint().block(timeout).latestSeq());
     }
 
     @Test
