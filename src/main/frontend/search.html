@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Search · Skystream</title></head>
+<body><main>
+  <header><div><p class="eyebrow">BLUESKY / LAST 24 HOURS</p><h1>Search posts</h1></div><a href="./">Word cloud</a></header>
+  <form class="search" role="search">
+    <label for="q">Find English posts from the last 24 hours by meaning, not just matching words.</label>
+    <input id="q" name="q" type="search" required maxlength="200" autocomplete="off" placeholder="remedies for a sore throat">
+    <button>Search</button>
+  </form>
+  <p id="result-status" role="status"></p>
+  <p id="error" role="alert" hidden></p>
+  <ol id="results" class="results"></ol>
+</main><script type="module" src="/src/search-page.ts"></script></body>
+</html>
