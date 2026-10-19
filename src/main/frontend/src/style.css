@@ -31,5 +31,10 @@ footer { padding: 18px 0; }
 .results li { background: #142235; border: 1px solid #2a3b50; border-radius: 12px; padding: 16px 18px; }
 .results .text { line-height: 1.5; overflow-wrap: anywhere; }
 .results .meta { margin-top: 10px; color: #93aac0; font-size: 13px; }
+.results .number { color: #79c8ff; }
+.answer { margin-top: 24px; padding: 18px; background: #142235; border: 1px solid #48627c; border-radius: 12px; }
+.answer h2 { margin: 0 0 10px; font-size: 16px; font-weight: 650; }
+#answer-text { line-height: 1.6; }
+.answer .note { margin-top: 12px; color: #93aac0; font-size: 12px; }
 #error { color: #f7a9ba; font-size: 14px; }
 @media (max-width: 600px) { main { padding: 24px 16px; } .toolbar, footer { align-items: flex-start; flex-direction: column; gap: 8px; } header nav { align-items: flex-end; flex-direction: column; gap: 8px; } h1 { font-size: 34px; } }

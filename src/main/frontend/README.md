@@ -8,7 +8,7 @@ Use the **Transition** selector to compare crossfade (the default), smooth movem
 
 Use **Refresh** to receive every cache refresh (the **Every batch** default), or receive the newest cache refresh at most once every 5, 10, 30, or 60 seconds. Each browser remembers its choice locally. Refresh and snapshot duration are independent. Changing either preference reconnects SSE, receives the first available cached result immediately, and then follows the selected interval. Unchanged results are not sent again. The browser renders received snapshots directly; it has no separate redraw timer.
 
-The search page, `search.html`, searches the last 24 hours of English posts by meaning through `GET /api/search?q=`, which needs the backend running with search enabled (see the project README). Each search is a plain form submission, so it has its own URL and history entry. Results show each post's text, how long ago it was seen, and a link to it on Bluesky.
+The search page, `search.html`, searches the last 24 hours of English posts by meaning through `GET /api/search/stream?q=`, which needs the backend running with search enabled (see the project README). Each search is a plain form submission, so it has its own URL and history entry. Results are numbered and show each post's text, how long ago it was seen, and a link to it on Bluesky. Claude's answer streams in below them, its citations, such as `[2]`, linking to the results. The page closes the event stream when it ends, since `EventSource` would otherwise reconnect and search again.
 
 ## Run
 
@@ -53,8 +53,8 @@ For production, serve `dist/` and `/api` on the same origin, or configure a host
 - `src/bucket.ts`: JSON validation and sorting.
 - `src/cloud.ts`: font sizing, cancellable layouts, rendering, and resizing.
 - `src/search.ts`: Bluesky search links for words.
-- `src/search-page.ts`: search page setup and result rendering.
-- `src/results.ts`: search result validation and relative times.
+- `src/search-page.ts`: search page setup, the event stream, and rendering.
+- `src/results.ts`: search result and answer validation, citations, and relative times.
 - `src/style.css`: responsive page styling.
 
 See the project README for Java and PostgreSQL startup instructions.

@@ -22,3 +22,27 @@ export function ago(time: string, now = Date.now()): string {
   if (minutes < 1) return 'just now';
   return minutes < 60 ? relative.format(-minutes, 'minute') : relative.format(-Math.round(minutes / 60), 'hour');
 }
+
+export function parseAnswerText(value: unknown): string {
+  const { text } = (value ?? {}) as Record<string, unknown>;
+  if (typeof text !== 'string') throw new Error('Expected answer text.');
+  return text;
+}
+
+/**
+ * Splits an answer into text and the result numbers it cites, as in "[2]" or "[1, 3]". Numbers outside the results stay
+ * text.
+ */
+export function citedParts(answer: string, results: number): (string | number)[] {
+  const parts: (string | number)[] = [];
+  let last = 0;
+  for (const match of answer.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+    const numbers = (match[1] ?? '').split(',').map(Number);
+    if (numbers.some(number => number < 1 || number > results)) continue;
+    parts.push(answer.slice(last, match.index));
+    numbers.forEach((number, i) => parts.push(...(i ? [' ', number] : [number])));
+    last = match.index + match[0].length;
+  }
+  parts.push(answer.slice(last));
+  return parts.filter(part => part !== '');
+}
