@@ -51,6 +51,11 @@ public class SearchConfiguration {
     }
 
     @Bean
+    AnswerService answerService(AnthropicClientAsync anthropic) {
+        return new AnswerService(anthropic, Duration.ofSeconds(10));
+    }
+
+    @Bean
     SearchService searchService(Embedder embedder, PostRepository posts, QueryExpander expander) {
         return new SearchService(embedder, posts, expander);
     }

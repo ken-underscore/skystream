@@ -1,6 +1,7 @@
 package com.example.skystream.search;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -15,6 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -24,6 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Testcontainers(disabledWithoutDocker = true)
@@ -49,6 +54,8 @@ class SearchControllerTests {
     private final List<String> queries = new CopyOnWriteArrayList<>();
     private final List<String> documents = new CopyOnWriteArrayList<>();
     private volatile List<String> hypothetical = List.of();
+    private volatile Flux<String> answer = Flux.empty();
+    private final List<List<SearchPost>> answered = new CopyOnWriteArrayList<>();
     private WebTestClient client;
 
     @BeforeEach
@@ -74,8 +81,15 @@ class SearchControllerTests {
                 return Mono.just(hypothetical);
             }
         };
-        client = WebTestClient.bindToController(new SearchController(new SearchService(embedder, repository, expander)))
-                .build();
+        var answers = new AnswerService(null, Duration.ZERO) {
+            @Override
+            Flux<String> answer(String query, List<SearchPost> posts) {
+                answered.add(posts);
+                return answer;
+            }
+        };
+        client = WebTestClient.bindToController(
+                new SearchController(new SearchService(embedder, repository, expander), answers)).build();
     }
 
     private static String uri(String rkey) {
@@ -130,6 +144,44 @@ class SearchControllerTests {
                 .jsonPath("$[*].text").isEqualTo(List.of("at 45", "at 80", "at 0"))
                 .jsonPath("$[0].similarity").value(Double.class, similarity -> assertEquals(1.0, similarity, 0.001));
         assertEquals(hypothetical, documents);
+    }
+
+    private List<ServerSentEvent<String>> stream(String query) {
+        return client.get().uri("/api/search/stream?q={q}", query).accept(MediaType.TEXT_EVENT_STREAM).exchange()
+                .expectStatus().isOk()
+                .returnResult(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                .getResponseBody().collectList().block(timeout);
+    }
+
+    private void captureEmbedded(String... rkeys) {
+        repository.capture(Arrays.stream(rkeys).map(rkey -> new SearchPost(uri(rkey), rkey, seenAt)).toList(), List.of())
+                .block(timeout);
+        var embeddings = new HashMap<String, float[]>();
+        for (int i = 0; i < rkeys.length; i++) {
+            double angle = Math.toRadians(10 * i);
+            embeddings.put(uri(rkeys[i]), Arrays.copyOf(new float[]{(float) Math.cos(angle), (float) Math.sin(angle)}, 768));
+        }
+        repository.saveEmbeddings(embeddings).block(timeout);
+    }
+
+    @Test
+    void streamsTheResultsThenTheAnswerFromThemThenDone() {
+        captureEmbedded("first", "second");
+        answer = Flux.just("Hikers loved ", "Sahale Arm [1].");
+        var events = stream("washington state hikes");
+        assertEquals(List.of("results", "answer", "answer", "done"), events.stream().map(ServerSentEvent::event).toList());
+        assertTrue(events.get(0).data().startsWith("[{\"text\":\"first\""));
+        assertEquals("{\"text\":\"Hikers loved \"}", events.get(1).data());
+        assertEquals(List.of(List.of("first", "second")),
+                answered.stream().map(posts -> posts.stream().map(SearchPost::text).toList()).toList());
+    }
+
+    @Test
+    void keepsTheResultsAndEndsWithFailedWhenTheAnswerFails() {
+        captureEmbedded("first");
+        answer = Flux.just("Hikers ").concatWith(Flux.error(new IllegalStateException("Haiku declined to answer")));
+        assertEquals(List.of("results", "answer", "failed"),
+                stream("washington state hikes").stream().map(ServerSentEvent::event).toList());
     }
 
     @Test

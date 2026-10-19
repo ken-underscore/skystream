@@ -102,7 +102,14 @@ set -a; . ./.env; set +a
 [{"text": "…", "seenAt": "2026-10-18T19:04:11.52Z", "url": "https://bsky.app/profile/did:plc:…/post/3m…", "similarity": 0.61}]
 ```
 
-`seenAt` is when Jetstream saw the post, and `url` its page on bsky.app. The query is trimmed and must be 1 to 200 characters, or the request returns HTTP 400. The endpoint exists only with search enabled. The frontend's search page, `search.html`, calls it.
+`seenAt` is when Jetstream saw the post, and `url` its page on bsky.app. The query is trimmed and must be 1 to 200 characters, or the request returns HTTP 400. The endpoints exist only with search enabled.
+
+`GET /api/search/stream?q=` does the same search, then has Haiku answer the query from the results, as server-sent events:
+- `results`: the results, as above.
+- `answer`: the answer's next piece of text, as `{"text": "…"}`, repeated as Haiku writes it. The answer is 2 to 4 sentences citing results by number, as in `[2]`, and says so when no result is relevant.
+- `done` (`{}`) ends the stream, or `failed` (`{}`) if no answer could be written. With no results, there's no answer.
+
+The posts are strangers' words, so the prompt passes them as data inside numbered `<post>` tags, escaped so a post can't close its tag, and tells Haiku never to follow instructions in them. A complete answer is cached by query and the list of results it cites, so a repeated search whose results haven't changed reuses it. Answers that stall for 10 seconds or are refused end with `failed`. The frontend's search page, `search.html`, uses this endpoint.
 
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
 
