@@ -72,13 +72,16 @@ class SearchControllerTests {
 
     @Test
     void returnsTheTenPostsNearestTheQueryMostSimilarFirst() {
-        // Post i points 5i degrees away from the query. They're saved in reverse, so storage order isn't the answer.
+        // Post i points 5i degrees away from the query. Their lengths vary, so ordering by distance or inner product
+        // instead of cosine would differ, and they're saved in reverse, so storage order isn't the answer.
         var posts = new ArrayList<SearchPost>();
         var embeddings = new HashMap<String, float[]>();
         for (int i = 11; i >= 0; i--) {
             posts.add(new SearchPost(uri("post" + i), "post " + i, seenAt));
             double angle = Math.toRadians(5 * i);
-            embeddings.put(uri("post" + i), Arrays.copyOf(new float[]{(float) Math.cos(angle), (float) Math.sin(angle)}, 768));
+            float length = 1 + i % 3;
+            embeddings.put(uri("post" + i),
+                    Arrays.copyOf(new float[]{length * (float) Math.cos(angle), length * (float) Math.sin(angle)}, 768));
         }
         posts.add(new SearchPost(uri("waiting"), "waiting", seenAt));
         repository.capture(posts, List.of()).block(timeout);

@@ -13,7 +13,8 @@ export function parseResults(value: unknown): SearchResult[] {
   });
 }
 
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'always' });
+// English, as the rest of the page is.
+const relative = new Intl.RelativeTimeFormat('en');
 
 /** How long ago a time was, in minutes for the first hour and in hours after that. */
 export function ago(time: string, now = Date.now()): string {

@@ -20,10 +20,10 @@ async function search(query: string) {
   try {
     const response = await fetch(`/api/search?${new URLSearchParams({ q: query })}`);
     if (!response.ok) throw new Error(failure(response.status));
-    const found = parseResults(await response.json());
+    const found = parseResults(await response.json().catch(() => { throw new Error('the server’s answer wasn’t JSON.'); }));
     results.replaceChildren(...found.map(render));
     status.textContent = found.length
-      ? `The ${found.length} posts closest in meaning to “${query}”.`
+      ? `The ${found.length === 1 ? 'post' : `${found.length} posts`} closest in meaning to “${query}”.`
       : 'No posts are searchable yet. Captured posts become searchable once they’re embedded, usually within seconds.';
   } catch (cause) {
     status.textContent = '';
