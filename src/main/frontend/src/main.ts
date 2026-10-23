@@ -1,10 +1,10 @@
 import './style.css';
-import { parseBucket } from './bucket';
+import { parseSnapshot } from './bucket';
 import { createCloud } from './cloud';
 import type { CloudTransition } from './cloud';
 import { connectStream } from './stream';
 import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
-import { loadSnapshotWindow, saveSnapshotWindow, snapshotWindows } from './snapshot';
+import { duration, loadSnapshotWindow, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -14,6 +14,7 @@ function element(id: string): HTMLElement {
 const demo = new URLSearchParams(location.search).get('demo') === '1';
 const empty = element('empty');
 const error = element('error');
+const collected = element('collected');
 const mode = element('mode') as HTMLAnchorElement;
 mode.href = demo ? location.pathname : '?demo=1';
 mode.textContent = demo ? 'Connect live' : 'Try demo';
@@ -46,10 +47,16 @@ refresh.addEventListener('change', () => {
 });
 function startStream() {
   const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
-  return connectStream(demo, Number(snapshot.value), Number(refresh.value), json => {
+  const windowSeconds = Number(snapshot.value);
+  return connectStream(demo, windowSeconds, Number(refresh.value), json => {
     try {
-      const words = parseBucket(json);
+      const { words, collectedSeconds } = parseSnapshot(json);
       renderer.update(words);
+      // The app holds only what it has collected since it started, minus any time it was down.
+      collected.hidden = collectedSeconds >= windowSeconds;
+      collected.textContent = collectedSeconds
+        ? `Only ${duration(collectedSeconds)} of the last ${windowLabel} has been collected so far.`
+        : `Nothing from the last ${windowLabel} has been collected yet.`;
       element('updated').textContent = `Received at ${new Date().toLocaleTimeString()}`;
       element('title').textContent = words.length
         ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
@@ -67,7 +74,7 @@ function startStream() {
 let disconnect = startStream();
 function restartStream() {
   disconnect();
-  error.hidden = true;
+  error.hidden = collected.hidden = true;
   disconnect = startStream();
 }
 snapshot.addEventListener('change', () => {

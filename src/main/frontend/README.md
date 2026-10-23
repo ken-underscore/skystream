@@ -2,7 +2,7 @@
 
 TypeScript receives combined word-count snapshots, d3-cloud calculates positions, and D3 draws SVG text. Each snapshot replaces the previous cloud when layout finishes. The top 100 words are selected; fewer may fit. Hover over words to see counts. Click a word, or Tab to it and press Enter, to open its Bluesky search results in a new tab; the cloud keeps updating in the original tab.
 
-Use **Snapshot** to choose the preceding 30 seconds (default), 1 minute, 5 minutes, 10 minutes, 30 minutes, or 1 hour. Each browser remembers its choice locally. Changing it closes the previous SSE stream and connects for the new window. The server sends its current cached snapshot immediately, even with a slower refresh setting. Until it arrives, the previous cloud stays visible. Windows use canonical bucket timestamps rather than browser time; a database with less history returns whatever is available.
+Use **Snapshot** to choose the preceding 30 seconds (default), 1 minute, 5 minutes, 10 minutes, 30 minutes, 1 hour, 3 hours, 8 hours, or 24 hours. Windows over an hour update every 5 minutes. When the app hasn't collected all of a window yet, because it hasn't run that long or was down, a note says how much it has. Each browser remembers its choice locally. Changing it closes the previous SSE stream and connects for the new window. The server sends its current cached snapshot immediately, even with a slower refresh setting. Until it arrives, the previous cloud stays visible. Windows use canonical bucket timestamps rather than browser time.
 
 Use the **Transition** selector to compare crossfade (the default), smooth movement and resizing, fade out / fade in, or instant replacement. Changing the selection previews that style using the current snapshot. Transitions last 650 ms and unfinished animations are interrupted when a newer layout is ready. The first cloud appears immediately, and the browser's reduced-motion preference disables animations. Moving words can overlap briefly while traveling to their final positions.
 
@@ -19,7 +19,7 @@ pnpm install
 pnpm dev
 ```
 
-Open the URL Vite prints. Click **Try demo**, or append `?demo=1`, for an immediate sample snapshot without Java. Demo mode aggregates synthetic five-second buckets for the selected duration, with one hour of sample history available immediately, and delivers results at the selected refresh rate. Demo mode never connects to the backend.
+Open the URL Vite prints. Click **Try demo**, or append `?demo=1`, for an immediate sample snapshot without Java. Demo mode aggregates synthetic five-second buckets for the selected duration, with one hour of sample history available immediately (longer windows scale it up), and delivers results at the selected refresh rate. Demo mode never connects to the backend.
 
 ```sh
 pnpm check   # Check TypeScript

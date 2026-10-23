@@ -1,5 +1,7 @@
 package com.example.skystream.service;
 
+import static com.example.skystream.repository.WordBucketRepository.FIVE_MINUTES;
+import static com.example.skystream.repository.WordBucketRepository.FIVE_SECONDS;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
@@ -37,6 +39,7 @@ import org.testcontainers.utility.DockerImageName;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordBucket;
+import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.search.SearchPost;
 import com.example.skystream.SkystreamApplication;
@@ -45,6 +48,8 @@ import dto.PostRecord;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -86,7 +91,7 @@ class WordBucketDatabaseTests {
     }
 
     private Map<String, Long> awaitSnapshot(Map<String, Long> expected) {
-        return snapshots.updates(30, Duration.ZERO).filter(expected::equals).next().block(timeout);
+        return snapshots.updates(30, Duration.ZERO).map(WordSnapshot::words).filter(expected::equals).next().block(timeout);
     }
 
     /** Reads stored counts directly, independent of the production snapshot query. */
@@ -179,11 +184,11 @@ class WordBucketDatabaseTests {
         assertEquals(Map.of("galaxy", 1L, "nebula", 1L), combinedCounts(origin.plusSeconds(30), origin.plusSeconds(35)));
         var event = WebClient.create("http://localhost:" + port).get().uri("/api/word-buckets")
                 .accept(MediaType.TEXT_EVENT_STREAM).retrieve()
-                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<Map<String, Long>>>() {})
+                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<WordSnapshot>>() {})
                 .next().block(timeout);
         assertNotNull(event);
         assertNull(event.event());
-        assertEquals(Map.of("galaxy", 6L, "nebula", 6L), event.data());
+        assertEquals(new WordSnapshot(Map.of("galaxy", 6L, "nebula", 6L), 30), event.data());
     }
 
     @Test
@@ -196,7 +201,7 @@ class WordBucketDatabaseTests {
         consumer.consumeCommits(Flux.just(commit(11, 3600, "partial"))).block(timeout);
         assertEquals(Map.of("thirty-seconds", 6L, "recent", 7L), awaitSnapshot(Map.of("thirty-seconds", 6L, "recent", 7L)));
         var client = WebClient.create("http://localhost:" + port);
-        var eventType = new ParameterizedTypeReference<ServerSentEvent<Map<String, Long>>>() {};
+        var eventType = new ParameterizedTypeReference<ServerSentEvent<WordSnapshot>>() {};
         int[] durations = {30, 60, 300, 600, 1800, 3600};
         String[] words = {"thirty-seconds", "minute", "five-minutes", "ten-minutes", "half-hour", "hour"};
         long[] counts = {6, 5, 4, 3, 2, 1};
@@ -206,16 +211,16 @@ class WordBucketDatabaseTests {
             expected.put(words[i], counts[i]);
             var event = client.get().uri("/api/word-buckets?windowSeconds=" + durations[i] + "&refreshIntervalMs=60000")
                     .accept(MediaType.TEXT_EVENT_STREAM).retrieve().bodyToFlux(eventType).next().block(timeout);
-            assertEquals(expected, event.data(), "Window of " + durations[i] + " seconds");
+            assertEquals(expected, event.data().words(), "Window of " + durations[i] + " seconds");
         }
         var defaultEvent = client.get().uri("/api/word-buckets")
                 .accept(MediaType.TEXT_EVENT_STREAM).retrieve().bodyToFlux(eventType).next().block(timeout);
-        assertEquals(Map.of("thirty-seconds", 6L, "recent", 7L), defaultEvent.data());
+        assertEquals(Map.of("thirty-seconds", 6L, "recent", 7L), defaultEvent.data().words());
         assertEquals(11, repository.checkpoint().block(timeout).latestSeq());
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"windowSeconds=0", "windowSeconds=-30", "windowSeconds=31", "windowSeconds=3601",
+    @ValueSource(strings = {"windowSeconds=0", "windowSeconds=-30", "windowSeconds=31", "windowSeconds=3601", "windowSeconds=86401",
             "windowSeconds=invalid", "refreshIntervalMs=-1", "refreshIntervalMs=1", "refreshIntervalMs=60001",
             "refreshIntervalMs=invalid"})
     void rejectsUnsupportedParameters(String query) {
@@ -240,15 +245,40 @@ class WordBucketDatabaseTests {
 
     @Test
     void filteredAggregatesReturnEmptyWindowsAndReflectCorrectionsToOlderBuckets() {
-        assertEquals(Map.of(), repository.snapshotCounts(origin).block(timeout));
+        var empty = repository.snapshots(FIVE_SECONDS, origin).block(timeout);
+        assertEquals(Set.copyOf(FIVE_SECONDS.windowSeconds()), empty.keySet());
+        assertTrue(empty.values().stream().allMatch(new WordSnapshot(Map.of(), 0)::equals));
         repository.saveBatch(batch(0, 10, 5, bucket(0, Map.of("hello", 3)))).block(timeout);
-        var first = repository.snapshotCounts(origin.plusSeconds(5)).block(timeout);
-        assertEquals(Set.copyOf(WordBucketRepository.SNAPSHOT_WINDOW_SECONDS), first.keySet());
-        assertTrue(first.values().stream().allMatch(words -> words.equals(Map.of("hello", 3L))));
+        var first = repository.snapshots(FIVE_SECONDS, origin.plusSeconds(5)).block(timeout);
+        assertTrue(first.values().stream().allMatch(new WordSnapshot(Map.of("hello", 3L), 5)::equals));
         repository.saveBatch(batch(10, 12, 10, bucket(0, Map.of("hello", 2, "late", 1)))).block(timeout);
-        var corrected = repository.snapshotCounts(origin.plusSeconds(10)).block(timeout);
-        assertTrue(corrected.values().stream().allMatch(words -> words.equals(Map.of("hello", 5L, "late", 1L))));
-        assertTrue(first.values().stream().allMatch(words -> words.equals(Map.of("hello", 3L))));
+        var corrected = repository.snapshots(FIVE_SECONDS, origin.plusSeconds(10)).block(timeout);
+        assertTrue(corrected.values().stream().allMatch(new WordSnapshot(Map.of("hello", 5L, "late", 1L), 5)::equals));
+        assertTrue(first.values().stream().allMatch(new WordSnapshot(Map.of("hello", 3L), 5)::equals));
+    }
+
+    @Test
+    void longWindowsEndAtTheNewestFiveMinuteBucketAndSayHowMuchIsCollected() {
+        // The newest bucket starts at 86550 s, so long windows end at 86400 s, excluding the incomplete bucket there.
+        // Five-minute buckets exist at 0, 57900 and 79800 s, so 15, 10 and 5 minutes of the windows are collected.
+        repository.saveBatch(batch(0, 10, 86550, bucket(0, Map.of("day", 1)), bucket(58000, Map.of("eight-hours", 2)),
+                bucket(80000, Map.of("three-hours", 3)), bucket(86400, Map.of("current", 4)),
+                bucket(86550, Map.of("newest", 5)))).block(timeout);
+        assertEquals(Map.of(
+                10800, new WordSnapshot(Map.of("three-hours", 3L), 300),
+                28800, new WordSnapshot(Map.of("three-hours", 3L, "eight-hours", 2L), 600),
+                86400, new WordSnapshot(Map.of("three-hours", 3L, "eight-hours", 2L, "day", 1L), 900)),
+                repository.snapshots(FIVE_MINUTES, origin.plusSeconds(86550)).block(timeout));
+        // Through the service and SSE, as JSON.
+        snapshots.persistBatches(Flux.just(batch(10, 11, 86555, bucket(86550, Map.of())))).blockLast(timeout);
+        var expected = new WordSnapshot(Map.of("three-hours", 3L, "eight-hours", 2L, "day", 1L), 900);
+        snapshots.updates(86400, Duration.ZERO).filter(expected::equals).next().block(timeout);
+        String json = WebClient.create("http://localhost:" + port).get().uri("/api/word-buckets?windowSeconds=86400")
+                .accept(MediaType.TEXT_EVENT_STREAM).retrieve().bodyToFlux(String.class).next().block(timeout);
+        JsonNode body = new ObjectMapper().readTree(json);
+        assertEquals(Set.of("words", "collectedSeconds"), Set.copyOf(body.propertyNames()));
+        assertEquals(3, body.get("words").get("three-hours").asLong());
+        assertEquals(900, body.get("collectedSeconds").asLong());
     }
 
     @Test
@@ -262,9 +292,10 @@ class WordBucketDatabaseTests {
         var recentTop = new HashMap<String, Long>(Map.of("tie-a", 5L));
         IntStream.range(0, 99).forEach(i -> recentTop.put("new-" + i, 10L));
         var oldTop = old.keySet().stream().collect(Collectors.toMap(word -> word, word -> 1000L));
-        var expected = WordBucketRepository.SNAPSHOT_WINDOW_SECONDS.stream()
+        var expected = FIVE_SECONDS.windowSeconds().stream()
                 .collect(Collectors.toMap(seconds -> seconds, seconds -> seconds <= 60 ? recentTop : oldTop));
-        assertEquals(expected, repository.snapshotCounts(origin.plusSeconds(65)).block(timeout));
+        assertEquals(expected, repository.snapshots(FIVE_SECONDS, origin.plusSeconds(65)).block(timeout).entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().words())));
     }
 
     /** Each stored bucket's start, in seconds after the origin, and its words. */
@@ -288,7 +319,7 @@ class WordBucketDatabaseTests {
                 bucket(300, Map.of("hello", 4)))).block(timeout);
         repository.saveBatch(batch(10, 12, 305, bucket(5, Map.of("late", 1)), bucket(305, Map.of()))).block(timeout);
         assertEquals(Map.of(0L, Map.of("hello", 3L, "world", 1L, "late", 1L), 300L, Map.of("hello", 4L)),
-                stored(WordBucketRepository.FIVE_MINUTES));
+                stored(FIVE_MINUTES));
     }
 
     @Test
@@ -299,9 +330,9 @@ class WordBucketDatabaseTests {
         repository.saveBatch(batch(0, 10, 90150, bucket(3300, Map.of("a", 1)), bucket(3600, Map.of("b", 1)),
                 bucket(86545, Map.of("c", 1)), bucket(86550, Map.of("d", 1)), bucket(90150, Map.of("e", 1)))).block(timeout);
         repository.expire().block(timeout);
-        assertEquals(Map.of(86550L, Map.of("d", 1L), 90150L, Map.of("e", 1L)), stored(WordBucketRepository.FIVE_SECONDS));
+        assertEquals(Map.of(86550L, Map.of("d", 1L), 90150L, Map.of("e", 1L)), stored(FIVE_SECONDS));
         assertEquals(Map.of(3600L, Map.of("b", 1L), 86400L, Map.of("c", 1L, "d", 1L), 90000L, Map.of("e", 1L)),
-                stored(WordBucketRepository.FIVE_MINUTES));
+                stored(FIVE_MINUTES));
     }
 
     @Test

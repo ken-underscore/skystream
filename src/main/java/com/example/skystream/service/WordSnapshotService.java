@@ -1,7 +1,11 @@
 package com.example.skystream.service;
 
+import static com.example.skystream.repository.WordBucketRepository.TIERS;
+
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,9 +16,12 @@ import org.springframework.context.event.EventListener;
 
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
+import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.repository.WordBucketRepository;
+import com.example.skystream.repository.WordBucketRepository.Tier;
 
 import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -25,22 +32,33 @@ import reactor.util.retry.Retry;
 public class WordSnapshotService {
     private static final Logger log = LoggerFactory.getLogger(WordSnapshotService.class);
     private final WordBucketRepository repository;
-    private final Sinks.Many<ConsumerCheckpoint> refreshRequests = Sinks.many().unicast().onBackpressureBuffer();
-    private final Sinks.Many<Map<Integer, Map<String, Long>>> cache = Sinks.many().replay().latest();
+    private final Sinks.Many<Instant> refreshRequests = Sinks.many().multicast().onBackpressureBuffer();
+    private final Map<Tier, Sinks.Many<Map<Integer, WordSnapshot>>> caches = TIERS.stream()
+            .collect(Collectors.toUnmodifiableMap(tier -> tier, tier -> Sinks.many().replay().latest()));
     private final Disposable cacheRefresh;
 
     public WordSnapshotService(WordBucketRepository repository) {
         this.repository = repository;
-        // Query work runs separately from ingestion. If it falls behind, keep the newest pending checkpoint.
-        cacheRefresh = refreshRequests.asFlux()
+        // Each tier has its own worker, so a slow 24-hour query doesn't hold up the 30-second window.
+        cacheRefresh = Disposables.composite(TIERS.stream().map(this::refresh).toList());
+    }
+
+    /**
+     * Refreshes the tier's windows each time its newest bucket changes: after every batch for 5-second buckets, every 5
+     * minutes for 5-minute ones. Query work runs separately from ingestion; if it falls behind, it keeps the newest.
+     */
+    private Disposable refresh(Tier tier) {
+        return refreshRequests.asFlux()
+                .map(tier::bucketStart)
+                .distinctUntilChanged()
                 .publishOn(Schedulers.parallel())
                 .onBackpressureLatest()
-                .concatMap(checkpoint -> Mono.defer(() -> repository.snapshotCounts(checkpoint.maxBucketStart()))
+                .concatMap(newest -> Mono.defer(() -> repository.snapshots(tier, newest))
                         .retryWhen(databaseRetry())
-                        .doOnNext(windows -> cache.tryEmitNext(windows))
+                        .doOnNext(windows -> caches.get(tier).tryEmitNext(windows))
                         .onErrorResume(error -> {
-                            log.warn("Could not refresh snapshot cache after seq={}; keeping previous results",
-                                    checkpoint.latestSeq(), error);
+                            log.warn("Could not refresh the word snapshots ending {}; keeping previous results", newest,
+                                    error);
                             return Mono.empty();
                         }), 0)
                 .subscribe();
@@ -51,11 +69,13 @@ public class WordSnapshotService {
         return batches.concatMap(batch -> repository.saveBatch(batch)
                 .retryWhen(databaseRetry())
                 .filter(checkpoint -> checkpoint.latestSeq() == batch.latestSeq()), 0)
-                .doOnNext(checkpoint -> refreshRequests.tryEmitNext(checkpoint));
+                .doOnNext(checkpoint -> refreshRequests.tryEmitNext(checkpoint.maxBucketStart()));
     }
 
-    public Flux<Map<String, Long>> updates(int windowSeconds, Duration refreshInterval) {
-        var results = cache.asFlux();
+    public Flux<WordSnapshot> updates(int windowSeconds, Duration refreshInterval) {
+        var tier = TIERS.stream().filter(candidate -> candidate.windowSeconds().contains(windowSeconds)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("No snapshot window of " + windowSeconds + " seconds"));
+        var results = caches.get(tier).asFlux();
         if (!refreshInterval.isZero()) {
             // First result immediately, then at most one new result per interval. Each refresh is a new
             // map, so identity skips the replayed initial result without comparing contents.
@@ -63,14 +83,14 @@ public class WordSnapshotService {
                     .distinctUntilChanged(windows -> windows, (a, b) -> a == b);
         }
         // A slow client keeps only the newest pending result, rather than pinning every refresh.
-        return results.onBackpressureLatest().map(windows -> windows.getOrDefault(windowSeconds, Map.of()));
+        return results.onBackpressureLatest().map(windows -> windows.get(windowSeconds));
     }
 
     // Runs before the web server's graceful shutdown, which waits for open SSE streams to complete.
     @EventListener(ContextClosedEvent.class)
     public void close() {
         cacheRefresh.dispose();
-        cache.tryEmitComplete();
+        caches.values().forEach(Sinks.Many::tryEmitComplete);
     }
 
     private Retry databaseRetry() {

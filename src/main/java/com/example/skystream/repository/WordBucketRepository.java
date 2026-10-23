@@ -18,6 +18,7 @@ import org.springframework.transaction.reactive.TransactionalOperator;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordBucket;
+import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.search.PostRepository;
 
 import io.r2dbc.spi.Row;
@@ -45,8 +46,9 @@ public class WordBucketRepository {
     public static final Tier FIVE_SECONDS = new Tier("word_bucket", "bucket_word", 5, List.of(30, 60, 300, 600, 1800, 3600));
     public static final Tier FIVE_MINUTES = new Tier("word_bucket_5m", "bucket_word_5m", 300, List.of(10800, 28800, 86400));
     public static final List<Tier> TIERS = List.of(FIVE_SECONDS, FIVE_MINUTES);
-    /** Snapshot durations, in seconds, that {@link #snapshotCounts} calculates. */
-    public static final List<Integer> SNAPSHOT_WINDOW_SECONDS = FIVE_SECONDS.windowSeconds();
+    /** Every snapshot duration, in seconds, shortest first. */
+    public static final List<Integer> SNAPSHOT_WINDOW_SECONDS =
+            TIERS.stream().flatMap(tier -> tier.windowSeconds().stream()).toList();
     /** Words kept per window: the browser draws at most this many. */
     public static final int TOP_WORDS = 100;
 
@@ -156,26 +158,30 @@ public class WordBucketRepository {
                 .then();
     }
 
-    /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Each window keeps its {@value #TOP_WORDS} most frequent words; windows without words are omitted. */
-    public Mono<Map<Integer, Map<String, Long>>> snapshotCounts(Instant end) {
-        // Columns must match SNAPSHOT_WINDOW_SECONDS.
+    /**
+     * Each of the tier's windows, ending at the start of the bucket holding {@code newest}, which is incomplete though its
+     * first counts are saved. Each window keeps its {@value #TOP_WORDS} most frequent words, and says how much of it has
+     * been collected, which is less than the window until the app has run that long.
+     */
+    public Mono<Map<Integer, WordSnapshot>> snapshots(Tier tier, Instant newest) {
+        Instant end = tier.bucketStart(newest);
+        return Mono.zip(topWords(tier, end), collectedSeconds(tier, end)).map(results -> tier.windowSeconds().stream()
+                .collect(Collectors.toUnmodifiableMap(seconds -> seconds, seconds -> new WordSnapshot(
+                        results.getT1().getOrDefault(seconds, Map.of()), results.getT2().get(seconds)))));
+    }
+
+    private Mono<Map<Integer, Map<String, Long>>> topWords(Tier tier, Instant end) {
         return database.sql("""
-                SELECT word,
-                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '30 seconds')::BIGINT AS seconds_30,
-                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '60 seconds')::BIGINT AS seconds_60,
-                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '300 seconds')::BIGINT AS seconds_300,
-                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '600 seconds')::BIGINT AS seconds_600,
-                    SUM(count) FILTER (WHERE bucket_started_at >= :end - INTERVAL '1800 seconds')::BIGINT AS seconds_1800,
-                    SUM(count)::BIGINT AS seconds_3600
-                FROM bucket_word
-                WHERE bucket_started_at >= :end - INTERVAL '3600 seconds' AND bucket_started_at < :end
+                SELECT word, %s
+                FROM %s
+                WHERE bucket_started_at >= :end - INTERVAL '%d seconds' AND bucket_started_at < :end
                 GROUP BY word
-                """)
+                """.formatted(windowColumns(tier, "SUM(count)", "bucket_started_at"), tier.words(), tier.longestWindow()))
                 .bind("end", end.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> {
                     String word = row.get("word", String.class);
                     var counts = new ArrayList<WindowCount>();
-                    for (int seconds : SNAPSHOT_WINDOW_SECONDS) {
+                    for (int seconds : tier.windowSeconds()) {
                         Long count = row.get("seconds_" + seconds, Long.class);
                         if (count != null) counts.add(new WindowCount(seconds, word, count));
                     }
@@ -186,5 +192,26 @@ public class WordBucketRepository {
                 .collect(Collectors.groupingBy(WindowCount::seconds, Collectors.collectingAndThen(Collectors.toList(),
                         counts -> counts.stream().sorted(MOST_FREQUENT).limit(TOP_WORDS)
                                 .collect(Collectors.toUnmodifiableMap(WindowCount::word, WindowCount::count)))));
+    }
+
+    /** How much of each window has buckets, gaps from downtime excluded. */
+    private Mono<Map<Integer, Long>> collectedSeconds(Tier tier, Instant end) {
+        return database.sql("""
+                SELECT %s
+                FROM %s
+                WHERE started_at >= :end - INTERVAL '%d seconds' AND started_at < :end
+                """.formatted(windowColumns(tier, "COUNT(*)", "started_at"), tier.buckets(), tier.longestWindow()))
+                .bind("end", end.atOffset(ZoneOffset.UTC))
+                .map((row, metadata) -> tier.windowSeconds().stream().collect(Collectors.toUnmodifiableMap(seconds -> seconds,
+                        seconds -> row.get("seconds_" + seconds, Long.class) * tier.bucketSeconds())))
+                .one();
+    }
+
+    /** One column per window, {@code seconds_<window>}, aggregating the rows whose {@code time} falls in it. */
+    private static String windowColumns(Tier tier, String aggregate, String time) {
+        return tier.windowSeconds().stream()
+                .map(seconds -> "%s FILTER (WHERE %s >= :end - INTERVAL '%d seconds')::BIGINT AS seconds_%d"
+                        .formatted(aggregate, time, seconds, seconds))
+                .collect(Collectors.joining(", "));
     }
 }

@@ -1,8 +1,11 @@
 package com.example.skystream.service;
 
+import static com.example.skystream.repository.WordBucketRepository.FIVE_MINUTES;
+import static com.example.skystream.repository.WordBucketRepository.FIVE_SECONDS;
 import static com.example.skystream.repository.WordBucketRepository.SNAPSHOT_WINDOW_SECONDS;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import java.time.Duration;
@@ -15,13 +18,16 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.TransientDataAccessResourceException;
 
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordBucket;
+import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.repository.WordBucketRepository;
+import com.example.skystream.repository.WordBucketRepository.Tier;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -43,9 +49,27 @@ class WordSnapshotServiceTests {
                 List.of(), List.of());
     }
 
-    private Map<Integer, Map<String, Long>> windows(long value) {
-        return SNAPSHOT_WINDOW_SECONDS.stream()
-                .collect(Collectors.toUnmodifiableMap(seconds -> seconds, seconds -> Map.of("hello", value)));
+    /** Every window of the tier holds "hello" with the given count. */
+    private static Map<Integer, WordSnapshot> windows(Tier tier, long value) {
+        return tier.windowSeconds().stream().collect(Collectors.toUnmodifiableMap(seconds -> seconds,
+                seconds -> new WordSnapshot(Map.of("hello", value), seconds)));
+    }
+
+    private Map<Integer, WordSnapshot> windows(long value) {
+        return windows(FIVE_SECONDS, value);
+    }
+
+    /** Answers each query with the seconds from the start to its newest bucket, for both tiers. */
+    private void countsSecondsSinceStart() {
+        when(repository.snapshots(any(), any())).thenAnswer(invocation -> {
+            Instant end = invocation.getArgument(1);
+            return Mono.just(windows(invocation.getArgument(0), Duration.between(start, end).getSeconds()));
+        });
+    }
+
+    @BeforeEach
+    void longWindowsAnswerZero() {
+        when(repository.snapshots(eq(FIVE_MINUTES), any())).thenAnswer(invocation -> Mono.just(windows(FIVE_MINUTES, 0)));
     }
 
     private void successfulSaves() {
@@ -56,46 +80,59 @@ class WordSnapshotServiceTests {
     }
 
     private void awaitSnapshot(long value) {
-        assertEquals(Map.of("hello", value), service.updates(30, Duration.ZERO)
+        assertEquals(Map.of("hello", value), service.updates(30, Duration.ZERO).map(WordSnapshot::words)
                 .filter(Map.of("hello", value)::equals).next().block(timeout));
     }
 
     @Test
     void startsEmptyAndQueriesOnlyAfterCommit() {
         successfulSaves();
-        when(repository.snapshotCounts(any())).thenReturn(Mono.just(windows(12)));
+        when(repository.snapshots(eq(FIVE_SECONDS), any())).thenReturn(Mono.just(windows(12)));
         Sinks.One<ConsumerCheckpoint> commit = Sinks.one();
         when(repository.saveBatch(batch(0))).thenReturn(commit.asMono());
-        StepVerifier.create(service.updates(30, Duration.ZERO).take(1))
+        StepVerifier.create(service.updates(30, Duration.ZERO).map(WordSnapshot::words).take(1))
                 .then(() -> {
                     service.persistBatches(Flux.just(batch(0))).subscribe();
-                    verify(repository, never()).snapshotCounts(any());
+                    verify(repository, never()).snapshots(any(), any());
                     commit.tryEmitValue(new ConsumerCheckpoint(1, start.plusSeconds(5)));
                 })
                 .expectNext(Map.of("hello", 12L)).verifyComplete();
-        verify(repository).snapshotCounts(start.plusSeconds(5));
+        verify(repository).snapshots(FIVE_SECONDS, start.plusSeconds(5));
     }
 
     @Test
     void allVisitorsAndDurationsShareOneQueryPerRefresh() {
         successfulSaves();
-        when(repository.snapshotCounts(any())).thenReturn(Mono.just(windows(12)));
+        when(repository.snapshots(eq(FIVE_SECONDS), any())).thenReturn(Mono.just(windows(12)));
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(12);
         var visitors = IntStream.range(0, 100)
                 .mapToObj(i -> service.updates(SNAPSHOT_WINDOW_SECONDS.get(i % SNAPSHOT_WINDOW_SECONDS.size()), Duration.ofMinutes(1)).next()).toList();
         StepVerifier.create(Flux.merge(visitors)).expectNextCount(100).verifyComplete();
-        verify(repository, times(1)).snapshotCounts(any());
+        verify(repository, times(1)).snapshots(eq(FIVE_SECONDS), any());
+        verify(repository, times(1)).snapshots(eq(FIVE_MINUTES), any());
+    }
+
+    @Test
+    void longWindowsRefreshOnlyWhenANewFiveMinuteBucketStarts() {
+        successfulSaves();
+        countsSecondsSinceStart();
+        // Batches end at :05, :10 and 5:00. The first two share the five-minute bucket starting at :00.
+        for (int i : new int[]{0, 1, 59}) service.persistBatches(Flux.just(batch(i))).blockLast(timeout);
+        awaitSnapshot(300);
+        assertEquals(Map.of("hello", 300L), service.updates(86400, Duration.ZERO).map(WordSnapshot::words)
+                .filter(Map.of("hello", 300L)::equals).next().block(timeout));
+        verify(repository).snapshots(FIVE_MINUTES, start);
+        verify(repository).snapshots(FIVE_MINUTES, start.plusSeconds(300));
+        verify(repository, times(2)).snapshots(eq(FIVE_MINUTES), any());
+        verify(repository, times(3)).snapshots(eq(FIVE_SECONDS), any());
     }
 
     @Test
     void slowVisitorReceivesOnlyTheNewestPendingResult() {
         successfulSaves();
-        when(repository.snapshotCounts(any())).thenAnswer(invocation -> {
-            Instant end = invocation.getArgument(0);
-            return Mono.just(windows(Duration.between(start, end).getSeconds()));
-        });
-        StepVerifier.create(service.updates(30, Duration.ZERO), 0)
+        countsSecondsSinceStart();
+        StepVerifier.create(service.updates(30, Duration.ZERO).map(WordSnapshot::words), 0)
                 .then(() -> {
                     for (int i = 0; i < 5; i++) service.persistBatches(Flux.just(batch(i))).blockLast(timeout);
                     awaitSnapshot(25);
@@ -109,27 +146,24 @@ class WordSnapshotServiceTests {
     @Test
     void replacesAllWindowsOnlyAfterTheWholeQueryFinishes() {
         successfulSaves();
-        var pending = Sinks.<Map<Integer, Map<String, Long>>>one();
-        when(repository.snapshotCounts(start.plusSeconds(5))).thenReturn(Mono.just(windows(1)));
-        when(repository.snapshotCounts(start.plusSeconds(10))).thenReturn(pending.asMono());
+        var pending = Sinks.<Map<Integer, WordSnapshot>>one();
+        when(repository.snapshots(FIVE_SECONDS, start.plusSeconds(5))).thenReturn(Mono.just(windows(1)));
+        when(repository.snapshots(FIVE_SECONDS, start.plusSeconds(10))).thenReturn(pending.asMono());
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(1);
         service.persistBatches(Flux.just(batch(1))).blockLast(timeout);
-        assertEquals(Map.of("hello", 1L), service.updates(3600, Duration.ZERO).next().block(timeout));
+        assertEquals(Map.of("hello", 1L), service.updates(3600, Duration.ZERO).next().block(timeout).words());
         pending.tryEmitValue(windows(2));
         awaitSnapshot(2);
-        assertEquals(Map.of("hello", 2L), service.updates(3600, Duration.ZERO).next().block(timeout));
+        assertEquals(Map.of("hello", 2L), service.updates(3600, Duration.ZERO).next().block(timeout).words());
     }
 
     @Test
     void slowQueriesDoNotDelayPersistenceAndEventuallyCacheLatestProgress() {
         successfulSaves();
-        var pending = Sinks.<Map<Integer, Map<String, Long>>>one();
-        when(repository.snapshotCounts(any())).thenAnswer(invocation -> {
-            Instant end = invocation.getArgument(0);
-            return end.equals(start.plusSeconds(5)) ? pending.asMono()
-                    : Mono.just(windows(Duration.between(start, end).getSeconds()));
-        });
+        var pending = Sinks.<Map<Integer, WordSnapshot>>one();
+        countsSecondsSinceStart();
+        when(repository.snapshots(FIVE_SECONDS, start.plusSeconds(5))).thenReturn(pending.asMono());
         // Virtual time hands each checkpoint to the query worker synchronously, so both later checkpoints are
         // waiting when the slow query finishes. A real worker thread can lag behind this test and fetch :10.
         VirtualTimeScheduler.getOrSet();
@@ -139,12 +173,12 @@ class WordSnapshotServiceTests {
                 assertEquals(i + 1, timed.get().persistBatches(Flux.just(batch(i))).blockLast(timeout).latestSeq());
             }
             pending.tryEmitValue(windows(5));
-            assertEquals(Map.of("hello", 15L), timed.get().updates(30, Duration.ZERO).next().block(timeout));
+            assertEquals(Map.of("hello", 15L), timed.get().updates(30, Duration.ZERO).next().block(timeout).words());
         } finally {
             timed.get().close();
             VirtualTimeScheduler.reset();
         }
-        verify(repository, never()).snapshotCounts(start.plusSeconds(10));
+        verify(repository, never()).snapshots(FIVE_SECONDS, start.plusSeconds(10));
         verify(repository, times(3)).saveBatch(any());
     }
 
@@ -152,11 +186,11 @@ class WordSnapshotServiceTests {
     void failedCacheQueryPreservesPreviousResultsAndDoesNotStopIngestion() {
         successfulSaves();
         var failed = Sinks.<Boolean>one();
-        when(repository.snapshotCounts(start.plusSeconds(5))).thenReturn(Mono.just(windows(1)));
-        when(repository.snapshotCounts(start.plusSeconds(10))).thenReturn(
-                Mono.<Map<Integer, Map<String, Long>>>error(new IllegalStateException("query failed"))
+        when(repository.snapshots(FIVE_SECONDS, start.plusSeconds(5))).thenReturn(Mono.just(windows(1)));
+        when(repository.snapshots(FIVE_SECONDS, start.plusSeconds(10))).thenReturn(
+                Mono.<Map<Integer, WordSnapshot>>error(new IllegalStateException("query failed"))
                         .doOnError(error -> failed.tryEmitValue(true)));
-        when(repository.snapshotCounts(start.plusSeconds(15))).thenReturn(Mono.just(windows(3)));
+        when(repository.snapshots(FIVE_SECONDS, start.plusSeconds(15))).thenReturn(Mono.just(windows(3)));
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(1);
         assertEquals(2, service.persistBatches(Flux.just(batch(1))).blockLast(timeout).latestSeq());
@@ -172,7 +206,7 @@ class WordSnapshotServiceTests {
         when(repository.saveBatch(batch(0))).thenReturn(Mono.error(new IllegalStateException("write failed")));
         StepVerifier.create(service.persistBatches(Flux.just(batch(0), batch(1))))
                 .expectErrorMessage("write failed").verify();
-        verify(repository, never()).snapshotCounts(any());
+        verify(repository, never()).snapshots(any(), any());
         verify(repository, never()).saveBatch(batch(1));
     }
 
@@ -182,7 +216,7 @@ class WordSnapshotServiceTests {
         when(repository.saveBatch(any())).thenReturn(Mono.defer(() -> attempts.getAndIncrement() == 0
                 ? Mono.error(new TransientDataAccessResourceException("temporary"))
                 : Mono.just(new ConsumerCheckpoint(1, start.plusSeconds(5)))));
-        when(repository.snapshotCounts(any())).thenReturn(Mono.just(windows(1)));
+        when(repository.snapshots(eq(FIVE_SECONDS), any())).thenReturn(Mono.just(windows(1)));
         StepVerifier.withVirtualTime(() -> service.persistBatches(Flux.just(batch(0))))
                 .thenAwait(Duration.ofSeconds(2))
                 .expectNext(new ConsumerCheckpoint(1, start.plusSeconds(5))).verifyComplete();
@@ -195,13 +229,10 @@ class WordSnapshotServiceTests {
 
     private StepVerifier.FirstStep<Map<String, Long>> verifyEvery30Seconds(long initialRequest) {
         successfulSaves();
-        when(repository.snapshotCounts(any())).thenAnswer(invocation -> {
-            Instant end = invocation.getArgument(0);
-            return Mono.just(windows(Duration.between(start, end).getSeconds()));
-        });
+        countsSecondsSinceStart();
         return StepVerifier.withVirtualTime(() -> {
             timed.set(new WordSnapshotService(repository));
-            return timed.get().updates(30, Duration.ofSeconds(30));
+            return timed.get().updates(30, Duration.ofSeconds(30)).map(WordSnapshot::words);
         }, initialRequest);
     }
 
