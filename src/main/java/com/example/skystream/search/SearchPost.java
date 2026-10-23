@@ -14,21 +14,30 @@ public record SearchPost(String uri, String text, Instant seenAt) {
     private static final Pattern URLS = Pattern.compile("https?://\\S+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern WORDS = Pattern.compile("\\S+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final int MIN_WORDS = 5;
+    // Bluesky's lexicon caps post text at 3,000 bytes, which is at least as many chars, but relays may not enforce it.
+    // A longer post is invalid, and could otherwise make every answer citing it costly or fail.
+    private static final int MAX_LENGTH = 3000;
 
     /**
-     * The searchable post in a commit seen at {@code seenAt}: an English top-level create with at least five words
-     * once links are removed. Its text has links removed and whitespace collapsed, as the search evaluation embedded it.
+     * The searchable post in a commit seen at {@code seenAt}: an English top-level create, no longer than Bluesky
+     * allows, with at least five words once links are removed. Its text has links removed and whitespace collapsed, as the search evaluation embedded it.
      */
     public static Optional<SearchPost> from(JetstreamCommit commit, Instant seenAt) {
         var record = commit.record();
         if (!"create".equals(commit.operation()) || record == null || record.text() == null || record.reply() != null
-                || !record.isEnglish()) {
+                || !record.isEnglish() || record.text().length() > MAX_LENGTH) {
             return Optional.empty();
         }
         List<String> words = WORDS.matcher(URLS.matcher(record.text()).replaceAll("")).results()
                 .map(MatchResult::group).toList();
         return words.size() < MIN_WORDS ? Optional.empty()
                 : Optional.of(new SearchPost(uri(commit), String.join(" ", words), seenAt));
+    }
+
+    /** The post's page on bsky.app, from its AT URI, {@code at://<did>/app.bsky.feed.post/<rkey>}. */
+    public String blueskyUrl() {
+        String[] parts = uri.substring("at://".length()).split("/");
+        return "https://bsky.app/profile/" + parts[0] + "/post/" + parts[2];
     }
 
     /** The post's AT URI, which identifies it across creates and deletes. */

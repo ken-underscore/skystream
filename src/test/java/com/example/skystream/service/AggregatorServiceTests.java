@@ -147,6 +147,16 @@ class AggregatorServiceTests {
     }
 
     @Test
+    void skipsPostsLongerThanBlueskyAllows() {
+        var batch = aggregator.createWordBuckets(Flux.just(
+                commit(1, 0, "word ".repeat(600), "en"),
+                commit(2, 1, "word ".repeat(600) + "!", "en"),
+                commit(3, 5, "next bucket flushes the batch", "en")), ConsumerCheckpoint.empty())
+                .blockFirst(Duration.ofSeconds(5));
+        assertEquals(List.of(uri(1), uri(3)), batch.posts().stream().map(SearchPost::uri).toList());
+    }
+
+    @Test
     void savesEveryDeleteAndOnlyPostsCreatedAfterTheirLastDelete() {
         var batch = aggregator.createWordBuckets(Flux.just(
                 commit(10, 0, "a post that is deleted right away", "en"),

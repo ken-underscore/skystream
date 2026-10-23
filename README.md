@@ -87,7 +87,29 @@ scripts/fetch-model.sh
 
 The script writes the model's files, pinned to one revision, to `models/embeddinggemma-300m` (gitignored). Set `skystream.search.model-dir` if they live elsewhere. The embedder's tests check its vectors against the ones recorded in `src/test/resources/embedding-fixture.json`, and are skipped when the model hasn't been fetched. The model is released under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
 
-With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, to `search_post`, and posts older than 24 hours are deleted every 10 minutes. A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It logs the backlog every minute, as in `Embedding backlog: 12 posts, oldest seen 4s ago`, which measures how far embedding is behind ingestion.
+With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, and no longer than Bluesky allows (3,000 characters), to `search_post`, and posts older than 24 hours are deleted every 10 minutes. A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It logs the backlog every minute, as in `Embedding backlog: 12 posts, oldest seen 4s ago`, which measures how far embedding is behind ingestion.
+
+Search calls Claude, so with search enabled the app needs an [Anthropic API key](https://console.anthropic.com/) in the `ANTHROPIC_API_KEY` environment variable, and doesn't start without one. The key is never logged. For example, with the key in a `.env` file (gitignored):
+
+```sh
+set -a; . ./.env; set +a
+./mvnw spring-boot:run -Dspring-boot.run.arguments=--skystream.search.enabled=true
+```
+
+`GET /api/search?q=` first asks Claude Haiku (`claude-haiku-5-5`, thinking off) for three short hypothetical posts that would answer the query. It embeds the query and those posts, and returns the 10 embedded posts nearest their normalized mean by cosine similarity, most similar first. The posts let a query find matches by what they're about rather than the words they share: "washington state hikes" finds a post about Sahale Arm. Expansions are cached by query, ignoring case and spacing, for a day. If Haiku fails or takes longer than 5 seconds, the search uses the query alone. Results are a JSON array:
+
+```json
+[{"text": "…", "seenAt": "2026-10-18T19:04:11.52Z", "url": "https://bsky.app/profile/did:plc:…/post/3m…", "similarity": 0.61}]
+```
+
+`seenAt` is when Jetstream saw the post, and `url` its page on bsky.app. The query is trimmed and must be 1 to 200 characters, or the request returns HTTP 400. The endpoints exist only with search enabled.
+
+`GET /api/search/stream?q=` does the same search, then has Haiku answer the query from the results, as server-sent events:
+- `results`: the results, as above.
+- `answer`: the answer's next piece of text, as `{"text": "…"}`, repeated as Haiku writes it. The answer is 2 to 4 sentences citing results by number, as in `[2]`, and says so when no result is relevant.
+- `done` (`{}`) ends the stream, or `failed` (`{}`) if no answer could be written. With no results, there's no answer.
+
+The posts are strangers' words, so the prompt passes them as data inside numbered `<post>` tags, escaped so a post can't close its tag, and tells Haiku never to follow instructions in them. A complete answer is cached by query and the list of results it was written from, so a repeated search whose results haven't changed reuses it. An answer ends with `failed` if Claude returns an error, refuses, stops short of a complete answer, or goes 10 seconds without new text. The frontend's search page, `search.html`, uses this endpoint.
 
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
 
