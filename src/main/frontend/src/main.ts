@@ -1,10 +1,9 @@
 import './style.css';
-import { parseSnapshot } from './bucket';
 import { createCloud } from './cloud';
 import type { CloudTransition } from './cloud';
 import { connectStream } from './stream';
 import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
-import { duration, loadSnapshotWindow, saveSnapshotWindow, snapshotWindows } from './snapshot';
+import { duration, loadSnapshotWindow, parseSnapshot, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -47,20 +46,23 @@ refresh.addEventListener('change', () => {
 });
 function startStream() {
   const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
+  // "the last hour", not "the last 1 hour".
+  const lastWindow = `the last ${windowLabel.replace(/^1 /, '')}`;
   const windowSeconds = Number(snapshot.value);
   return connectStream(demo, windowSeconds, Number(refresh.value), json => {
     try {
       const { words, collectedSeconds } = parseSnapshot(json);
       renderer.update(words);
-      // The app holds only what it has collected since it started, minus any time it was down.
+      // The app holds only what it has collected since it began, minus any time it was down.
       collected.hidden = collectedSeconds >= windowSeconds;
       collected.textContent = collectedSeconds
-        ? `Only ${duration(collectedSeconds)} of the last ${windowLabel} has been collected so far.`
-        : `Nothing from the last ${windowLabel} has been collected yet.`;
+        ? `Only ${duration(collectedSeconds)} of ${lastWindow} has been collected so far.`
+        : `Nothing from ${lastWindow} has been collected yet.`;
       element('updated').textContent = `Received at ${new Date().toLocaleTimeString()}`;
-      element('title').textContent = words.length
+      // The cloud's title carries the note too, for screen readers.
+      element('title').textContent = (words.length
         ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
-        : `Latest snapshot (${windowLabel}) contains no words.`;
+        : `Latest snapshot (${windowLabel}) contains no words.`) + (collected.hidden ? '' : ` ${collected.textContent}`);
       error.hidden = true;
     } catch (cause) {
       error.textContent = `Could not read bucket: ${cause instanceof Error ? cause.message : 'Invalid data'}`;

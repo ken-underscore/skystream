@@ -1,7 +1,7 @@
 package com.example.skystream.service;
 
-import static com.example.skystream.repository.WordBucketRepository.FIVE_MINUTES;
-import static com.example.skystream.repository.WordBucketRepository.FIVE_SECONDS;
+import static com.example.skystream.repository.WordBucketRepository.Tier.FIVE_MINUTES;
+import static com.example.skystream.repository.WordBucketRepository.Tier.FIVE_SECONDS;
 import static com.example.skystream.repository.WordBucketRepository.SNAPSHOT_WINDOW_SECONDS;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;

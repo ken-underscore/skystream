@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import com.example.skystream.model.WordBucket;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
+import com.example.skystream.repository.WordBucketRepository.Tier;
 import com.example.skystream.search.SearchPost;
 
 import dto.JetstreamCommit;
@@ -93,7 +94,7 @@ public class AggregatorService {
                 throw new IllegalArgumentException("Jetstream commit is missing witnessedAt");
             }
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
-            Instant start = Instant.ofEpochSecond(Math.floorDiv(witnessedAt.getEpochSecond(), 5) * 5);
+            Instant start = Tier.FIVE_SECONDS.bucketStart(witnessedAt);
             addWords(commit, pending.computeIfAbsent(start, key -> new HashMap<>()));
             if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
             latestProcessedSeq = commit.seq();

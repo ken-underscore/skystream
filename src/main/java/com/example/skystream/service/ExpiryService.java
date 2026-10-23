@@ -20,7 +20,8 @@ import reactor.core.publisher.Mono;
  * search posts older than {@link PostRepository#RETENTION}.
  */
 @Service
-@ConditionalOnProperty(name = "skystream.jetstream.enabled", havingValue = "true")
+// Ingestion is on unless disabled, so expiry is too.
+@ConditionalOnProperty(name = "skystream.jetstream.enabled", havingValue = "true", matchIfMissing = true)
 public class ExpiryService implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ExpiryService.class);
     private final Disposable schedule;

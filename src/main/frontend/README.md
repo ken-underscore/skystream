@@ -49,8 +49,7 @@ For production, serve `dist/` and `/api` on the same origin, or configure a host
 - `src/main.ts`: word cloud page setup.
 - `src/stream.ts`: SSE connection and demo feed.
 - `src/refresh.ts`: supported refresh intervals and browser preference storage.
-- `src/snapshot.ts`: snapshot duration options and browser preference storage.
-- `src/bucket.ts`: JSON validation and sorting.
+- `src/snapshot.ts`: snapshot validation and sorting, duration options, and browser preference storage.
 - `src/cloud.ts`: font sizing, cancellable layouts, rendering, and resizing.
 - `src/search.ts`: Bluesky search links for words.
 - `src/search-page.ts`: search page setup, the event stream, and rendering.

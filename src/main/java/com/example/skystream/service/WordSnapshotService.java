@@ -1,11 +1,10 @@
 package com.example.skystream.service;
 
-import static com.example.skystream.repository.WordBucketRepository.TIERS;
-
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,14 +32,14 @@ public class WordSnapshotService {
     private static final Logger log = LoggerFactory.getLogger(WordSnapshotService.class);
     private final WordBucketRepository repository;
     private final Sinks.Many<Instant> refreshRequests = Sinks.many().multicast().onBackpressureBuffer();
-    private final Map<Tier, Sinks.Many<Map<Integer, WordSnapshot>>> caches = TIERS.stream()
-            .collect(Collectors.toUnmodifiableMap(tier -> tier, tier -> Sinks.many().replay().latest()));
+    private final Map<Tier, Sinks.Many<Map<Integer, WordSnapshot>>> caches = new EnumMap<>(Tier.class);
     private final Disposable cacheRefresh;
 
     public WordSnapshotService(WordBucketRepository repository) {
         this.repository = repository;
+        for (Tier tier : Tier.values()) caches.put(tier, Sinks.many().replay().latest());
         // Each tier has its own worker, so a slow 24-hour query doesn't hold up the 30-second window.
-        cacheRefresh = Disposables.composite(TIERS.stream().map(this::refresh).toList());
+        cacheRefresh = Disposables.composite(Arrays.stream(Tier.values()).map(this::refresh).toList());
     }
 
     /**
@@ -73,7 +72,7 @@ public class WordSnapshotService {
     }
 
     public Flux<WordSnapshot> updates(int windowSeconds, Duration refreshInterval) {
-        var tier = TIERS.stream().filter(candidate -> candidate.windowSeconds().contains(windowSeconds)).findFirst()
+        var tier = Tier.serving(windowSeconds)
                 .orElseThrow(() -> new IllegalArgumentException("No snapshot window of " + windowSeconds + " seconds"));
         var results = caches.get(tier).asFlux();
         if (!refreshInterval.isZero()) {
