@@ -1,15 +1,16 @@
-export interface SearchResult { text: string; seenAt: string; url: string }
+export interface SearchResult { text: string; seenAt: string; url: string; similarity: number }
 
 export function parseResults(value: unknown): SearchResult[] {
   if (!Array.isArray(value)) throw new Error('Expected a JSON array of posts.');
   return value.map((post: unknown) => {
-    const { text, seenAt, url } = (post ?? {}) as Record<string, unknown>;
+    const { text, seenAt, url, similarity } = (post ?? {}) as Record<string, unknown>;
     // Only bsky.app links are rendered, so a bad URL can't become a script or another site's link.
     if (typeof text !== 'string' || typeof seenAt !== 'string' || Number.isNaN(Date.parse(seenAt))
-      || typeof url !== 'string' || !url.startsWith('https://bsky.app/')) {
-      throw new Error('Each post must have text, a time, and a bsky.app link.');
+      || typeof url !== 'string' || !url.startsWith('https://bsky.app/')
+      || typeof similarity !== 'number' || !Number.isFinite(similarity)) {
+      throw new Error('Each post must have text, a time, a bsky.app link, and a similarity score.');
     }
-    return { text, seenAt, url };
+    return { text, seenAt, url, similarity };
   });
 }
 

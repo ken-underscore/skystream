@@ -10,6 +10,7 @@ function element(id: string): HTMLElement {
 const status = element('result-status');
 const error = element('error');
 const results = element('results');
+const similarityNote = element('similarity-note');
 const answer = element('answer');
 const answerText = element('answer-text');
 // The form submits as a plain GET, so each search is its own page in history and can be shared as a link.
@@ -52,7 +53,7 @@ function search(query: string) {
     status.textContent = found.length
       ? `The ${found.length === 1 ? 'post' : `${found.length} posts`} closest in meaning to “${query}”.`
       : 'No posts are searchable yet. Captured posts become searchable once they’re embedded, usually within seconds.';
-    answer.hidden = found.length === 0;
+    answer.hidden = similarityNote.hidden = found.length === 0;
     answerText.setAttribute('aria-busy', 'true');
     answerText.textContent = 'Writing an answer…';
   });
@@ -89,6 +90,8 @@ function render(result: SearchResult, index: number): HTMLLIElement {
   const number = document.createElement('span');
   number.className = 'number';
   number.textContent = `[${index + 1}]`;
+  const similarity = document.createElement('span');
+  similarity.textContent = `similarity ${result.similarity.toFixed(2)}`;
   const time = document.createElement('time');
   time.dateTime = result.seenAt;
   time.title = new Date(result.seenAt).toLocaleString();
@@ -100,7 +103,7 @@ function render(result: SearchResult, index: number): HTMLLIElement {
   link.textContent = 'View on Bluesky';
   const meta = document.createElement('p');
   meta.className = 'meta';
-  meta.append(number, ' · ', time, ' · ', link);
+  meta.append(number, ' · ', similarity, ' · ', time, ' · ', link);
   const item = document.createElement('li');
   item.id = `result-${index + 1}`;
   item.append(text, meta);
