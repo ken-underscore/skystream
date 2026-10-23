@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
@@ -103,7 +104,7 @@ class WordBucketDatabaseTests {
 
     @BeforeEach
     void clearDatabase() {
-        database.sql("TRUNCATE word_bucket, search_post CASCADE").fetch().rowsUpdated()
+        database.sql("TRUNCATE word_bucket, word_bucket_5m, search_post CASCADE").fetch().rowsUpdated()
                 .then(database.sql("UPDATE consumer_checkpoint SET latest_seq = 0, max_bucket_started_at = NULL WHERE id = 1")
                         .fetch().rowsUpdated()).block(timeout);
     }
@@ -264,6 +265,43 @@ class WordBucketDatabaseTests {
         var expected = WordBucketRepository.SNAPSHOT_WINDOW_SECONDS.stream()
                 .collect(Collectors.toMap(seconds -> seconds, seconds -> seconds <= 60 ? recentTop : oldTop));
         assertEquals(expected, repository.snapshotCounts(origin.plusSeconds(65)).block(timeout));
+    }
+
+    /** Each stored bucket's start, in seconds after the origin, and its words. */
+    private Map<Long, Map<String, Long>> stored(WordBucketRepository.Tier tier) {
+        return database.sql("SELECT b.started_at, w.word, w.count FROM %s b LEFT JOIN %s w ON w.bucket_started_at = b.started_at"
+                        .formatted(tier.buckets(), tier.words()))
+                .map((row, metadata) -> Map.entry(
+                        Duration.between(origin, row.get("started_at", OffsetDateTime.class).toInstant()).getSeconds(),
+                        row.get("word", String.class) == null ? Map.<String, Long>of()
+                                : Map.of(row.get("word", String.class), row.get("count", Long.class))))
+                .all().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> {
+                    var merged = new HashMap<>(a);
+                    merged.putAll(b);
+                    return merged;
+                })).block(timeout);
+    }
+
+    @Test
+    void addsEachBucketToItsFiveMinuteTotalCorrectionsIncluded() {
+        repository.saveBatch(batch(0, 10, 300, bucket(0, Map.of("hello", 1)), bucket(295, Map.of("hello", 2, "world", 1)),
+                bucket(300, Map.of("hello", 4)))).block(timeout);
+        repository.saveBatch(batch(10, 12, 305, bucket(5, Map.of("late", 1)), bucket(305, Map.of()))).block(timeout);
+        assertEquals(Map.of(0L, Map.of("hello", 3L, "world", 1L, "late", 1L), 300L, Map.of("hello", 4L)),
+                stored(WordBucketRepository.FIVE_MINUTES));
+    }
+
+    @Test
+    void expiresBucketsPastEachTiersLongestWindowFromTheNewestBucket() {
+        repository.expire().block(timeout);  // Nothing to measure from yet.
+        // The newest bucket starts at 90150 s. Five-second buckets reach back an hour, to 86550 s. Five-minute ones
+        // reach back 24 hours from the start of the newest 5-minute bucket, 90000 s, to 3600 s.
+        repository.saveBatch(batch(0, 10, 90150, bucket(3300, Map.of("a", 1)), bucket(3600, Map.of("b", 1)),
+                bucket(86545, Map.of("c", 1)), bucket(86550, Map.of("d", 1)), bucket(90150, Map.of("e", 1)))).block(timeout);
+        repository.expire().block(timeout);
+        assertEquals(Map.of(86550L, Map.of("d", 1L), 90150L, Map.of("e", 1L)), stored(WordBucketRepository.FIVE_SECONDS));
+        assertEquals(Map.of(3600L, Map.of("b", 1L), 86400L, Map.of("c", 1L, "d", 1L), 90000L, Map.of("e", 1L)),
+                stored(WordBucketRepository.FIVE_MINUTES));
     }
 
     @Test

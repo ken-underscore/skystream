@@ -27,8 +27,26 @@ import reactor.core.publisher.Mono;
 @Repository
 @DependsOnDatabaseInitialization
 public class WordBucketRepository {
+    /**
+     * Word counts kept at one bucket size, and the windows read from them. Each batch adds its counts to every tier, so a
+     * long window sums a few hundred coarse buckets rather than thousands of 5-second ones.
+     */
+    public record Tier(String buckets, String words, int bucketSeconds, List<Integer> windowSeconds) {
+        /** The start of the bucket holding {@code time}. */
+        public Instant bucketStart(Instant time) {
+            return Instant.ofEpochSecond(Math.floorDiv(time.getEpochSecond(), bucketSeconds) * bucketSeconds);
+        }
+
+        int longestWindow() {
+            return windowSeconds.getLast();
+        }
+    }
+
+    public static final Tier FIVE_SECONDS = new Tier("word_bucket", "bucket_word", 5, List.of(30, 60, 300, 600, 1800, 3600));
+    public static final Tier FIVE_MINUTES = new Tier("word_bucket_5m", "bucket_word_5m", 300, List.of(10800, 28800, 86400));
+    public static final List<Tier> TIERS = List.of(FIVE_SECONDS, FIVE_MINUTES);
     /** Snapshot durations, in seconds, that {@link #snapshotCounts} calculates. */
-    public static final List<Integer> SNAPSHOT_WINDOW_SECONDS = List.of(30, 60, 300, 600, 1800, 3600);
+    public static final List<Integer> SNAPSHOT_WINDOW_SECONDS = FIVE_SECONDS.windowSeconds();
     /** Words kept per window: the browser draws at most this many. */
     public static final int TOP_WORDS = 100;
 
@@ -92,17 +110,19 @@ public class WordBucketRepository {
     }
 
     private Mono<Void> addBucket(WordBucket bucket) {
-        return database.sql("""
-                INSERT INTO word_bucket (started_at) VALUES (:start)
-                ON CONFLICT (started_at) DO NOTHING
-                """)
-                .bind("start", bucket.start().atOffset(ZoneOffset.UTC)).fetch().rowsUpdated()
-                .thenMany(Flux.fromIterable(bucket.words().entrySet()).buffer(500)
-                        .concatMap(entries -> addWords(bucket.start(), entries)))
+        return Flux.fromIterable(TIERS).concatMap(tier -> addBucket(tier, tier.bucketStart(bucket.start()), bucket.words()))
                 .then();
     }
 
-    private Mono<Void> addWords(Instant start, List<Map.Entry<String, Integer>> entries) {
+    private Mono<Void> addBucket(Tier tier, Instant start, Map<String, Integer> counts) {
+        return database.sql("INSERT INTO " + tier.buckets() + " (started_at) VALUES (:start) ON CONFLICT (started_at) DO NOTHING")
+                .bind("start", start.atOffset(ZoneOffset.UTC)).fetch().rowsUpdated()
+                .thenMany(Flux.fromIterable(counts.entrySet()).buffer(500)
+                        .concatMap(entries -> addWords(tier, start, entries)))
+                .then();
+    }
+
+    private Mono<Void> addWords(Tier tier, Instant start, List<Map.Entry<String, Integer>> entries) {
         String[] words = new String[entries.size()];
         Long[] counts = new Long[entries.size()];
         for (int i = 0; i < entries.size(); i++) {
@@ -111,16 +131,29 @@ public class WordBucketRepository {
             counts[i] = entry.getValue().longValue();
         }
         return database.sql("""
-                INSERT INTO bucket_word (bucket_started_at, word, count)
+                INSERT INTO %1$s (bucket_started_at, word, count)
                 SELECT :start, words.word, words.count
                 FROM UNNEST(CAST(:words AS text[]), CAST(:counts AS bigint[])) AS words(word, count)
                 ON CONFLICT (bucket_started_at, word)
-                DO UPDATE SET count = bucket_word.count + EXCLUDED.count
-                """)
+                DO UPDATE SET count = %1$s.count + EXCLUDED.count
+                """.formatted(tier.words()))
                 .bind("start", start.atOffset(ZoneOffset.UTC))
                 .bind("words", words)
                 .bind("counts", counts)
                 .fetch().rowsUpdated().then();
+    }
+
+    /**
+     * Deletes the buckets each tier's longest window no longer reaches, with their words. Like the windows, this is
+     * measured from the newest bucket rather than the clock, so catching up after downtime keeps what the windows show.
+     */
+    public Mono<Void> expire() {
+        return checkpoint().mapNotNull(ConsumerCheckpoint::maxBucketStart)
+                .flatMapMany(newest -> Flux.fromIterable(TIERS).concatMap(tier -> database
+                        .sql("DELETE FROM " + tier.buckets() + " WHERE started_at < :cutoff")
+                        .bind("cutoff", tier.bucketStart(newest).minusSeconds(tier.longestWindow()).atOffset(ZoneOffset.UTC))
+                        .fetch().rowsUpdated()))
+                .then();
     }
 
     /** Calculates all supported windows in one statement, excluding the current incomplete bucket. Each window keeps its {@value #TOP_WORDS} most frequent words; windows without words are omitted. */

@@ -24,11 +24,6 @@ public class SearchConfiguration {
         return new GemmaEmbedder(modelDir, threads);
     }
 
-    @Bean
-    PostExpiry postExpiry(PostRepository posts) {
-        return new PostExpiry(posts);
-    }
-
     /**
      * Every search calls Claude, so search doesn't start without a key. Surrounding whitespace, such as the {@code \r} a
      * CRLF {@code .env} leaves, is removed, and a key with a space or control character inside is refused: the HTTP

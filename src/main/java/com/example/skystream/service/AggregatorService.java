@@ -34,7 +34,7 @@ public class AggregatorService {
     private static final Pattern VALID_WORD = Pattern.compile("[a-z]+(?:'[a-z]+)*|[0-9]+");
     private static final Set<String> STOP_WORDS = loadStopWords();
 
-    // Search posts are captured only when search is enabled; otherwise nothing would expire or embed them.
+    // Search posts are captured only when search is enabled; otherwise nothing would embed them.
     private final boolean captureSearchPosts;
 
     // Matches SearchConfiguration's @ConditionalOnProperty, which enables search only for "true".
