@@ -1,7 +1,7 @@
 import { easeCubicInOut, scaleOrdinal, scaleSqrt, select } from 'd3';
 import type { EnterElement, Selection } from 'd3';
 import cloud from 'd3-cloud';
-import type { WordCount } from './bucket';
+import type { WordCount } from './snapshot';
 import { searchUrl } from './search';
 
 interface PositionedWord extends WordCount { size: number; x?: number | undefined; y?: number | undefined }

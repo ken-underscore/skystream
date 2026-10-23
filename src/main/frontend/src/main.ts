@@ -1,10 +1,9 @@
 import './style.css';
-import { parseBucket } from './bucket';
 import { createCloud } from './cloud';
 import type { CloudTransition } from './cloud';
 import { connectStream } from './stream';
 import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
-import { loadSnapshotWindow, saveSnapshotWindow, snapshotWindows } from './snapshot';
+import { duration, loadSnapshotWindow, parseSnapshot, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -14,6 +13,7 @@ function element(id: string): HTMLElement {
 const demo = new URLSearchParams(location.search).get('demo') === '1';
 const empty = element('empty');
 const error = element('error');
+const collected = element('collected');
 const mode = element('mode') as HTMLAnchorElement;
 mode.href = demo ? location.pathname : '?demo=1';
 mode.textContent = demo ? 'Connect live' : 'Try demo';
@@ -46,14 +46,23 @@ refresh.addEventListener('change', () => {
 });
 function startStream() {
   const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
-  return connectStream(demo, Number(snapshot.value), Number(refresh.value), json => {
+  // "the last hour", not "the last 1 hour".
+  const lastWindow = `the last ${windowLabel.replace(/^1 /, '')}`;
+  const windowSeconds = Number(snapshot.value);
+  return connectStream(demo, windowSeconds, Number(refresh.value), json => {
     try {
-      const words = parseBucket(json);
+      const { words, collectedSeconds } = parseSnapshot(json);
       renderer.update(words);
+      // The app holds only what it has collected since it began, minus any time it was down.
+      collected.hidden = collectedSeconds >= windowSeconds;
+      collected.textContent = collectedSeconds
+        ? `Only ${duration(collectedSeconds)} of ${lastWindow} has been collected so far.`
+        : `Nothing from ${lastWindow} has been collected yet.`;
       element('updated').textContent = `Received at ${new Date().toLocaleTimeString()}`;
-      element('title').textContent = words.length
+      // The cloud's title carries the note too, for screen readers.
+      element('title').textContent = (words.length
         ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
-        : `Latest snapshot (${windowLabel}) contains no words.`;
+        : `Latest snapshot (${windowLabel}) contains no words.`) + (collected.hidden ? '' : ` ${collected.textContent}`);
       error.hidden = true;
     } catch (cause) {
       error.textContent = `Could not read bucket: ${cause instanceof Error ? cause.message : 'Invalid data'}`;
@@ -67,7 +76,7 @@ function startStream() {
 let disconnect = startStream();
 function restartStream() {
   disconnect();
-  error.hidden = true;
+  error.hidden = collected.hidden = true;
   disconnect = startStream();
 }
 snapshot.addEventListener('change', () => {

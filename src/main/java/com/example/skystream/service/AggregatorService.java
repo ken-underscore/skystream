@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import com.example.skystream.model.WordBucket;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
+import com.example.skystream.repository.WordBucketRepository.Tier;
 import com.example.skystream.search.SearchPost;
 
 import dto.JetstreamCommit;
@@ -34,7 +35,7 @@ public class AggregatorService {
     private static final Pattern VALID_WORD = Pattern.compile("[a-z]+(?:'[a-z]+)*|[0-9]+");
     private static final Set<String> STOP_WORDS = loadStopWords();
 
-    // Search posts are captured only when search is enabled; otherwise nothing would expire or embed them.
+    // Search posts are captured only when search is enabled; otherwise nothing would embed them.
     private final boolean captureSearchPosts;
 
     // Matches SearchConfiguration's @ConditionalOnProperty, which enables search only for "true".
@@ -93,7 +94,7 @@ public class AggregatorService {
                 throw new IllegalArgumentException("Jetstream commit is missing witnessedAt");
             }
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
-            Instant start = Instant.ofEpochSecond(Math.floorDiv(witnessedAt.getEpochSecond(), 5) * 5);
+            Instant start = Tier.FIVE_SECONDS.bucketStart(witnessedAt);
             addWords(commit, pending.computeIfAbsent(start, key -> new HashMap<>()));
             if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
             latestProcessedSeq = commit.seq();
