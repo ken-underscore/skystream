@@ -9,8 +9,9 @@ services:
       POSTGRES_USER: local_user
       POSTGRES_PASSWORD: local_password
       POSTGRES_DB: skystream_db
+    # A random port on this machine only: a server must not expose the database.
     ports:
-      - "5432"
+      - "127.0.0.1::5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
