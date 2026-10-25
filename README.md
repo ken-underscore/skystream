@@ -91,7 +91,7 @@ scripts/fetch-model.sh
 
 The script writes the model's files, pinned to one revision, to `models/embeddinggemma-300m` (gitignored). Set `skystream.search.model-dir` if they live elsewhere. The embedder's tests check its vectors against the ones recorded in `src/test/resources/embedding-fixture.json`, and are skipped when the model hasn't been fetched. The model is released under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
 
-With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, and no longer than Bluesky allows (3,000 characters), to `search_post`, and posts older than 24 hours are deleted every 10 minutes (see Expiry). A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It logs the backlog every minute, as in `Embedding backlog: 12 posts, oldest seen 4s ago`, which measures how far embedding is behind ingestion.
+With search enabled, ingestion also saves English top-level posts with at least five words, once links are removed, and no longer than Bluesky allows (3,000 characters), to `search_post`, and posts older than 24 hours are deleted every 10 minutes (see Expiry). A background worker embeds waiting posts newest first, up to 256 at a time on a thread of its own, so in a burst fresh posts become searchable first and older ones catch up later or expire unembedded. If a batch fails, its posts are embedded one at a time, and any that fail on their own are marked `embedding_failed` and skipped from then on, so one bad post can't stall the rest. It reads the backlog at startup and every minute, which measures how far embedding is behind ingestion, logging it as in `Embedding backlog: 12 posts, oldest seen 4s ago` and reporting it as metrics (see Metrics).
 
 Search calls Claude, so with search enabled the app needs an [Anthropic API key](https://console.anthropic.com/) in the `ANTHROPIC_API_KEY` environment variable, and doesn't start without one. The key is never logged. For example, with the key in a `.env` file (gitignored):
 
@@ -116,6 +116,24 @@ set -a; . ./.env; set +a
 The posts are strangers' words, so the prompt passes them as data inside numbered `<post>` tags, escaped so a post can't close its tag, and tells Haiku never to follow instructions in them. A complete answer is cached by query and the list of results it was written from, so a repeated search whose results haven't changed reuses it. An answer ends with `failed` if Claude returns an error, refuses, stops short of a complete answer, or goes 10 seconds without new text. The frontend's search page, `search.html`, uses this endpoint.
 
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
+
+## Metrics
+
+The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`. Actuator runs on its own port, which listens only on the local machine, and exposes nothing but `health` and `prometheus`. Spring Boot's built-in metrics cover the JVM, CPU, HTTP requests (`http_server_requests_seconds`, which for `/api/search/stream` times the whole stream, answer included) and the database connection pool (`r2dbc_pool_*`). The app adds:
+
+| Metric | What it measures |
+|---|---|
+| `skystream_ingestion_lag_seconds` | How far behind now the newest saved 5-second bucket starts: up to 5 seconds plus Jetstream's own delay while keeping up, more while catching up. |
+| `skystream_ingestion_save_seconds` | Saving each batch, per attempt. |
+| `skystream_snapshots_refresh_seconds{tier}` | Refreshing each tier's word cloud windows, per attempt. |
+| `skystream_expiry_seconds{data}`, `skystream_expiry_deleted_total{data}` | Each expiry run, and the rows it deleted: `word_buckets` or `search_posts`. |
+| `skystream_search_backlog`, `skystream_search_backlog_age_seconds` | Posts waiting for an embedding, and how long ago the oldest was seen. Read at startup and every minute. |
+| `skystream_search_embeddings_total{outcome}` | Posts `embedded`, or `failed` and skipped. Its rate is the embedding speed. |
+| `skystream_search_seconds` | Searches, from the query to the results. |
+| `skystream_search_expansion_seconds` | Query expansion, cached ones included. A failure or timeout, which falls back to the plain query, is an `error`. |
+| `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text. Cached answers aren't timed. |
+
+Timers have an `outcome` tag: `success`, `error` or `cancel`. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 120 series.
 
 ## External database
 

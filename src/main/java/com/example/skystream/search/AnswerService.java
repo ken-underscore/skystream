@@ -15,7 +15,9 @@ import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.ThinkingConfigDisabled;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.example.skystream.Timing;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import reactor.core.publisher.Flux;
 
 /**
@@ -32,15 +34,17 @@ class AnswerService {
 
     private final AnthropicClientAsync anthropic;
     private final Duration timeout;
+    private final MeterRegistry registry;
     private record Key(String query, List<String> uris) {}
 
     private final Cache<Key, String> cache = Caffeine.newBuilder()
             .maximumSize(10_000).expireAfterWrite(Duration.ofDays(1)).build();
 
     /** Fails a stream that goes {@code timeout} without its next piece of text. */
-    AnswerService(AnthropicClientAsync anthropic, Duration timeout) {
+    AnswerService(AnthropicClientAsync anthropic, Duration timeout, MeterRegistry registry) {
         this.anthropic = anthropic;
         this.timeout = timeout;
+        this.registry = registry;
     }
 
     /** The answer as it's written, or nothing when there are no posts to answer from. */
@@ -49,14 +53,15 @@ class AnswerService {
         var key = new Key(QueryExpander.normalize(query), posts.stream().map(SearchPost::uri).toList());
         String cached = cache.getIfPresent(key);
         if (cached != null) return Flux.just(cached);
-        return Flux.defer(() -> {
+        // Only Haiku's answers are timed, not cached ones.
+        return Timing.timed(Flux.defer(() -> {
             var answer = new StringBuilder();
             return stream(params(query, posts)).timeout(timeout)
                     .doOnNext(answer::append)
                     .doOnComplete(() -> {
                         if (!answer.isEmpty()) cache.put(key, answer.toString());
                     });
-        });
+        }), registry, "skystream.search.answer");
     }
 
     private static MessageCreateParams params(String query, List<SearchPost> posts) {

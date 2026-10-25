@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.databind.JsonNode;
 
 class AnswerServiceTests {
@@ -25,13 +26,14 @@ class AnswerServiceTests {
 
     private FakeMessagesApi api;
     private AnswerService answers;
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @BeforeEach
     void start() throws IOException {
         api = new FakeMessagesApi();
         api.contentType = "text/event-stream";
         api.body = FakeMessagesApi.streamed("end_turn", "Hikers loved ", "Sahale Arm [1].");
-        answers = new AnswerService(api.client, Duration.ofSeconds(5));
+        answers = new AnswerService(api.client, Duration.ofSeconds(5), registry);
     }
 
     @AfterEach
@@ -78,6 +80,12 @@ class AnswerServiceTests {
         // Different results need a new answer.
         answer("washington state hikes", POSTS.subList(0, 1));
         assertEquals(2, api.requests.size());
+        // Only Haiku's answers are timed.
+        assertEquals(2, answerTimes("success"));
+    }
+
+    private long answerTimes(String outcome) {
+        return registry.get("skystream.search.answer").tag("outcome", outcome).timer().count();
     }
 
     @Test
@@ -98,12 +106,14 @@ class AnswerServiceTests {
         api.body = FakeMessagesApi.streamed("end_turn", "Fine.");
         assertEquals(List.of("Fine."), answer("washington state hikes", POSTS));
         assertEquals(4, api.requests.size());
+        assertEquals(3, answerTimes("error"));
+        assertEquals(1, answerTimes("success"));
     }
 
     @Test
     void failsWhenTheStreamStalls() {
         api.delay = Duration.ofSeconds(2);
-        var slow = new AnswerService(api.client, Duration.ofMillis(300));
+        var slow = new AnswerService(api.client, Duration.ofMillis(300), new SimpleMeterRegistry());
         long start = System.nanoTime();
         assertThrows(RuntimeException.class, () -> slow.answer("hikes", POSTS).blockLast(Duration.ofSeconds(10)));
         assertTrue(Duration.ofNanos(System.nanoTime() - start).compareTo(Duration.ofSeconds(1)) < 0);

@@ -11,6 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +26,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -105,6 +107,12 @@ class EmbeddingWorkerTests {
                 .block(timeout);
     }
 
+    private void await(BooleanSupplier condition) {
+        Mono.fromSupplier(condition::getAsBoolean).filter(met -> met)
+                .repeatWhenEmpty(repeat -> repeat.delayElements(Duration.ofMillis(50)))
+                .block(timeout);
+    }
+
     private void awaitBatches(FakeEmbedder embedder, int count) {
         Mono.fromSupplier(embedder.batches::size).filter(batches -> batches >= count)
                 .repeatWhenEmpty(repeat -> repeat.delayElements(Duration.ofMillis(50)))
@@ -127,7 +135,7 @@ class EmbeddingWorkerTests {
         repository.capture(List.of(new SearchPost("expired", "text of expired", now.minus(Duration.ofHours(25)))),
                 List.of()).block(timeout);
         var embedder = new FakeEmbedder(0, Duration.ZERO);
-        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50))) {
+        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50), new SimpleMeterRegistry())) {
             awaitEmbedded(5);
         }
         assertEquals(List.of(List.of("text of 1", "text of 2"), List.of("text of 3", "text of 4"), List.of("text of 5")),
@@ -146,7 +154,7 @@ class EmbeddingWorkerTests {
                 return super.newestUnembedded(since, limit);
             }
         };
-        try (var worker = new EmbeddingWorker(counted, new FakeEmbedder(0, Duration.ZERO), 2, Duration.ofMinutes(1))) {
+        try (var worker = new EmbeddingWorker(counted, new FakeEmbedder(0, Duration.ZERO), 2, Duration.ofMinutes(1), new SimpleMeterRegistry())) {
             awaitEmbedded(4);
             // Long enough for a fetch that didn't wait to happen.
             Mono.delay(Duration.ofMillis(200)).block();
@@ -160,7 +168,7 @@ class EmbeddingWorkerTests {
         capture("1");
         // Fails the batch and then the post on its own, so nothing embeds and the batch itself is retried.
         var embedder = new FakeEmbedder(2, Duration.ZERO);
-        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50))) {
+        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50), new SimpleMeterRegistry())) {
             awaitEmbedded(1);
             capture("2");
             awaitEmbedded(2);
@@ -174,7 +182,7 @@ class EmbeddingWorkerTests {
     void marksAPostThatFailsOnItsOwnAndEmbedsTheRest() {
         capture("1", "poison", "3");
         var embedder = new FakeEmbedder(0, Duration.ZERO);
-        try (var worker = new EmbeddingWorker(repository, embedder, 3, Duration.ofMillis(50))) {
+        try (var worker = new EmbeddingWorker(repository, embedder, 3, Duration.ofMillis(50), new SimpleMeterRegistry())) {
             awaitEmbedded(2);
             capture("4");
             awaitEmbedded(3);
@@ -186,10 +194,34 @@ class EmbeddingWorkerTests {
     }
 
     @Test
+    void countsEmbeddedAndFailedPosts() {
+        capture("1", "poison", "3");
+        var registry = new SimpleMeterRegistry();
+        try (var worker = new EmbeddingWorker(repository, new FakeEmbedder(0, Duration.ZERO), 3, Duration.ofMillis(50),
+                registry)) {
+            await(() -> registry.get("skystream.search.embeddings").tag("outcome", "failed").counter().count() == 1);
+        }
+        assertEquals(2, registry.get("skystream.search.embeddings").tag("outcome", "embedded").counter().count());
+    }
+
+    @Test
+    void reportsTheBacklogFromStartup() {
+        capture("1", "2");
+        var registry = new SimpleMeterRegistry();
+        // Nothing embeds, so both posts stay waiting.
+        try (var worker = new EmbeddingWorker(repository, new FakeEmbedder(Integer.MAX_VALUE, Duration.ZERO), 2,
+                Duration.ofMillis(50), registry)) {
+            await(() -> registry.get("skystream.search.backlog").gauge().value() == 2);
+            // The older post was seen 2 seconds before the test started.
+            assertTrue(registry.get("skystream.search.backlog.age").timeGauge().value(TimeUnit.SECONDS) >= 2);
+        }
+    }
+
+    @Test
     void marksNothingWhenNoPostEmbedsOnItsOwn() {
         capture("1", "2");
         var embedder = new FakeEmbedder(Integer.MAX_VALUE, Duration.ZERO);
-        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50))) {
+        try (var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50), new SimpleMeterRegistry())) {
             // Each attempt is the batch and then each post on its own: two attempts, so the batch was retried.
             awaitBatches(embedder, 6);
         }
@@ -201,7 +233,7 @@ class EmbeddingWorkerTests {
     void closeWaitsForTheBatchInProgress() throws InterruptedException {
         capture("1");
         var embedder = new FakeEmbedder(0, Duration.ofMillis(500));
-        var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50));
+        var worker = new EmbeddingWorker(repository, embedder, 2, Duration.ofMillis(50), new SimpleMeterRegistry());
         assertTrue(embedder.started.await(timeout.toSeconds(), TimeUnit.SECONDS));
         worker.close();
         assertEquals(1, embedder.finished.get());
@@ -211,7 +243,7 @@ class EmbeddingWorkerTests {
     void closeStopsEmbeddingPostsOneAtATime() throws InterruptedException {
         capture("1", "2", "3");
         var embedder = new FakeEmbedder(Integer.MAX_VALUE, Duration.ofMillis(500));
-        var worker = new EmbeddingWorker(repository, embedder, 3, Duration.ofMillis(50));
+        var worker = new EmbeddingWorker(repository, embedder, 3, Duration.ofMillis(50), new SimpleMeterRegistry());
         assertTrue(embedder.started.await(timeout.toSeconds(), TimeUnit.SECONDS));
         worker.close();
         // Closed while the batch ran, so once it failed, no post was embedded on its own.

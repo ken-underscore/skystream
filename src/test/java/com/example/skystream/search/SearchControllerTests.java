@@ -28,6 +28,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -57,6 +58,7 @@ class SearchControllerTests {
     private volatile Flux<String> answer = Flux.empty();
     private final List<List<SearchPost>> answered = new CopyOnWriteArrayList<>();
     private WebTestClient client;
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @BeforeEach
     void setUp() {
@@ -76,13 +78,13 @@ class SearchControllerTests {
                 return Arrays.copyOf(new float[]{1, 0}, 768);
             }
         };
-        var expander = new QueryExpander(null, Duration.ZERO) {
+        var expander = new QueryExpander(null, Duration.ZERO, new SimpleMeterRegistry()) {
             @Override
             Mono<List<String>> expand(String query) {
                 return Mono.just(hypothetical);
             }
         };
-        var answers = new AnswerService(null, Duration.ZERO) {
+        var answers = new AnswerService(null, Duration.ZERO, new SimpleMeterRegistry()) {
             @Override
             Flux<String> answer(String query, List<SearchPost> posts) {
                 answered.add(posts);
@@ -90,7 +92,7 @@ class SearchControllerTests {
             }
         };
         client = WebTestClient.bindToController(
-                new SearchController(new SearchService(embedder, repository, expander), answers)).build();
+                new SearchController(new SearchService(embedder, repository, expander, registry), answers)).build();
     }
 
     private static String uri(String rkey) {
@@ -122,6 +124,11 @@ class SearchControllerTests {
                 .jsonPath("$[0].seenAt").isEqualTo("2026-10-18T12:00:00Z")
                 .jsonPath("$[0].similarity").value(Double.class, similarity -> assertEquals(1.0, similarity, 0.001));
         assertEquals(List.of("sore throat"), queries);
+        assertEquals(1, searchTimes("success"));
+    }
+
+    private long searchTimes(String outcome) {
+        return registry.get("skystream.search").tag("outcome", outcome).timer().count();
     }
 
     @Test
@@ -192,6 +199,7 @@ class SearchControllerTests {
         client.get().uri("/api/search/stream?q={q}", "unembeddable").accept(MediaType.TEXT_EVENT_STREAM).exchange()
                 .expectStatus().is5xxServerError();
         assertEquals(List.of(), answered);
+        assertEquals(1, searchTimes("error"));
     }
 
     @Test

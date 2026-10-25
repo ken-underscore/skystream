@@ -11,6 +11,8 @@ import org.springframework.context.annotation.Configuration;
 import com.anthropic.client.AnthropicClientAsync;
 import com.anthropic.client.okhttp.AnthropicOkHttpClientAsync;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 /** Semantic search is off unless enabled, so the app runs without the embedding model. */
 @Configuration
 @ConditionalOnProperty(name = "skystream.search.enabled", havingValue = "true")
@@ -41,22 +43,23 @@ public class SearchConfiguration {
     }
 
     @Bean
-    QueryExpander queryExpander(AnthropicClientAsync anthropic) {
-        return new QueryExpander(anthropic, Duration.ofSeconds(5));
+    QueryExpander queryExpander(AnthropicClientAsync anthropic, MeterRegistry registry) {
+        return new QueryExpander(anthropic, Duration.ofSeconds(5), registry);
     }
 
     @Bean
-    AnswerService answerService(AnthropicClientAsync anthropic) {
-        return new AnswerService(anthropic, Duration.ofSeconds(10));
+    AnswerService answerService(AnthropicClientAsync anthropic, MeterRegistry registry) {
+        return new AnswerService(anthropic, Duration.ofSeconds(10), registry);
     }
 
     @Bean
-    SearchService searchService(Embedder embedder, PostRepository posts, QueryExpander expander) {
-        return new SearchService(embedder, posts, expander);
+    SearchService searchService(Embedder embedder, PostRepository posts, QueryExpander expander,
+            MeterRegistry registry) {
+        return new SearchService(embedder, posts, expander, registry);
     }
 
     @Bean
-    EmbeddingWorker embeddingWorker(PostRepository posts, Embedder embedder) {
-        return new EmbeddingWorker(posts, embedder, 256, Duration.ofSeconds(1));
+    EmbeddingWorker embeddingWorker(PostRepository posts, Embedder embedder, MeterRegistry registry) {
+        return new EmbeddingWorker(posts, embedder, 256, Duration.ofSeconds(1), registry);
     }
 }

@@ -14,6 +14,9 @@ import com.anthropic.models.messages.ThinkingConfigDisabled;
 import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import com.example.skystream.Timing;
+
+import io.micrometer.core.instrument.MeterRegistry;
 import reactor.core.publisher.Mono;
 
 /**
@@ -35,20 +38,23 @@ class QueryExpander {
 
     private final AnthropicClientAsync anthropic;
     private final Duration timeout;
+    private final MeterRegistry registry;
     private final AsyncCache<String, List<String>> cache = Caffeine.newBuilder()
             .maximumSize(10_000).expireAfterWrite(Duration.ofDays(1)).buildAsync();
 
-    QueryExpander(AnthropicClientAsync anthropic, Duration timeout) {
+    QueryExpander(AnthropicClientAsync anthropic, Duration timeout, MeterRegistry registry) {
         this.anthropic = anthropic;
         this.timeout = timeout;
+        this.registry = registry;
     }
 
     /** Up to three hypothetical posts for the query, or none if Haiku fails or takes longer than the timeout. */
     Mono<List<String>> expand(String query) {
         // Concurrent searches for one query share a call. Failed calls aren't cached, and a call that outlasts the
         // timeout keeps running, so its posts are cached for the next search.
-        return Mono.fromFuture(() -> cache.get(normalize(query), (key, executor) -> write(query)), true)
-                .timeout(timeout)
+        // Timed before the fallback, so a failure or timeout counts as an error.
+        return Timing.timed(Mono.fromFuture(() -> cache.get(normalize(query), (key, executor) -> write(query)), true)
+                .timeout(timeout), registry, "skystream.search.expansion")
                 .onErrorResume(error -> {
                     log.warn("Could not expand a query, so searching with it alone: {}", error.toString());
                     return Mono.just(List.of());
