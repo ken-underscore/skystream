@@ -76,8 +76,13 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean",
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi"
@@ -90,7 +95,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "skystream_ingestion_lag_seconds{host=\"$host\"}",
+          "expr": "max_over_time(skystream_ingestion_lag_seconds{host=\"$host\"}[$__interval])",
           "legendFormat": "lag"
         }
       ],
@@ -245,8 +250,13 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean",
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi"
@@ -259,7 +269,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "skystream_search_backlog_posts{host=\"$host\"}",
+          "expr": "max_over_time(skystream_search_backlog_posts{host=\"$host\"}[$__interval])",
           "legendFormat": "posts waiting"
         }
       ],
@@ -292,8 +302,13 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean",
+            "lastNotNull"
+          ]
         },
         "tooltip": {
           "mode": "multi"
@@ -306,7 +321,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "skystream_search_backlog_age_seconds{host=\"$host\"}",
+          "expr": "max_over_time(skystream_search_backlog_age_seconds{host=\"$host\"}[$__interval])",
           "legendFormat": "age"
         }
       ],
@@ -523,7 +538,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "sum(increase(skystream_search_expansion_seconds_count{host=\"$host\",outcome=\"error\"}[5m])) or vector(0)",
+          "expr": "sum(increase(skystream_search_expansion_seconds_count{host=\"$host\"}[5m])) - (sum(increase(skystream_search_expansion_seconds_bucket{host=\"$host\",outcome=\"success\",le=\"5.0\"}[5m])) or vector(0)) or vector(0)",
           "legendFormat": "expansion fell back"
         },
         {
@@ -608,8 +623,8 @@
             "uid": "${datasource}"
           },
           "refId": "C",
-          "expr": "sum(jvm_memory_used_bytes{host=\"$host\",area=\"heap\"})",
-          "legendFormat": "app heap"
+          "expr": "namedprocess_namegroup_memory_bytes{host=\"$host\",groupname=\"skystream\",memtype=\"resident\"}",
+          "legendFormat": "app"
         },
         {
           "datasource": {
@@ -617,11 +632,11 @@
             "uid": "${datasource}"
           },
           "refId": "D",
-          "expr": "sum(jvm_memory_used_bytes{host=\"$host\",area=\"nonheap\"})",
-          "legendFormat": "app non-heap"
+          "expr": "sum(jvm_memory_used_bytes{host=\"$host\",area=\"heap\"})",
+          "legendFormat": "app's JVM heap"
         }
       ],
-      "description": "The embedding model's memory is outside the JVM, so it shows in the server's use, not the app's heap."
+      "description": "The app's memory includes the embedding model's, outside the JVM heap."
     },
     {
       "type": "timeseries",
@@ -675,6 +690,15 @@
           "refId": "B",
           "expr": "process_cpu_usage{host=\"$host\"}",
           "legendFormat": "app"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "C",
+          "expr": "sum(rate(namedprocess_namegroup_cpu_seconds_total{host=\"$host\",groupname=\"postgres\"}[5m])) / count(node_cpu_seconds_total{host=\"$host\",mode=\"idle\"})",
+          "legendFormat": "Postgres"
         }
       ],
       "description": "Share of all cores."

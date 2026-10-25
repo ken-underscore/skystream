@@ -15,7 +15,7 @@
       "refId": "A",
       "datasourceUid": "DATASOURCE_UID",
       "relativeTimeRange": {"from": 300, "to": 0},
-      "model": {"refId": "A", "expr": "max(up{job=\"skystream\"})", "instant": true}
+      "model": {"refId": "A", "expr": "set by publish.sh, to watch one host", "instant": true}
     },
     {
       "refId": "C",

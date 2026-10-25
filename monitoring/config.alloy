@@ -1,4 +1,4 @@
-// Scrapes the app, the host and Postgres once a minute, and sends the metrics to Grafana Cloud.
+// Scrapes the app, its processes, the host and Postgres once a minute, and sends the metrics to Grafana Cloud.
 // Alloy runs on the host's network, so it reaches the app's local-only management port.
 
 prometheus.remote_write "grafana_cloud" {
@@ -27,6 +27,28 @@ prometheus.scrape "skystream" {
 prometheus.scrape "postgres" {
   job_name   = "postgres"
   targets    = [{"__address__" = "127.0.0.1:9187"}]
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// Memory and CPU of the app and Postgres. The app's includes memory outside the JVM, such as the embedding model's.
+prometheus.exporter.process "processes" {
+  procfs_path = "/host/proc"
+  // Per-thread series would number in the hundreds for the JVM alone.
+  track_threads = false
+
+  matcher {
+    name    = "skystream"
+    cmdline = ["java .*skystream"]
+  }
+
+  matcher {
+    name = "postgres"
+    comm = ["postgres"]
+  }
+}
+
+prometheus.scrape "processes" {
+  targets    = prometheus.exporter.process.processes.targets
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 }
 

@@ -12,7 +12,7 @@ From the project root:
 ./mvnw spring-boot:run
 ```
 
-Spring Boot starts PostgreSQL from `compose.yaml`, discovers its mapped port and credentials, initializes the bucket schema, and connects to Jetstream on startup. The Compose volume retains data. The HTTP server defaults to port 8080.
+Spring Boot starts PostgreSQL from `compose.yaml`, on a random port only this machine can reach, discovers that port and the credentials, initializes the bucket schema, and connects to Jetstream on startup. The Compose volume retains data. The HTTP server defaults to port 8080.
 
 For a clean start, stop any running instance of the app and run:
 
@@ -137,9 +137,15 @@ Timers have an `outcome` tag: `success`, `error` or `cancel`. The search timers 
 
 ### Sending metrics to Grafana Cloud
 
-The Compose file's `monitoring` profile runs [Grafana Alloy](https://grafana.com/docs/alloy/), which scrapes the app, the host (CPU, memory, disk, network) and PostgreSQL (through `postgres-exporter`: table and index sizes, dead rows, autovacuum runs) once a minute, and sends the metrics to Grafana Cloud. The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 170 from the app, about 480 from PostgreSQL, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Linux (WSL included). Its own status page is at `http://127.0.0.1:12345`.
+The Compose file's `monitoring` profile runs [Grafana Alloy](https://grafana.com/docs/alloy/), which scrapes once a minute and sends the metrics to Grafana Cloud:
+- the app,
+- the app's and PostgreSQL's processes: memory, including the embedding model's outside the JVM, and CPU,
+- the host: CPU, memory, disk and network,
+- PostgreSQL, through `postgres-exporter`: table and index sizes, dead rows and autovacuum runs.
 
-1. Create a free Grafana Cloud stack. On its Prometheus details page, find the remote write URL, the username, and create an access policy token with the `metrics:write` scope. Add them to `.env`:
+The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 170 from the app, 480 from PostgreSQL, 55 from the processes, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Docker Engine with the Compose plugin on Linux (WSL included), not Docker Desktop. Its status page is at `http://127.0.0.1:12345`, on that machine only.
+
+1. Create a free Grafana Cloud stack. On its Prometheus details page, find the remote write URL and the username, and create an access policy token with the `metrics:write` scope. Add them to `.env`, and on a server make it readable only by you (`chmod 600 .env`):
 
    ```sh
    GRAFANA_CLOUD_PROMETHEUS_URL=https://…/api/prom/push
@@ -147,22 +153,24 @@ The Compose file's `monitoring` profile runs [Grafana Alloy](https://grafana.com
    GRAFANA_CLOUD_TOKEN=glc_…
    ```
 
-2. With the app running, start monitoring. Starting the app doesn't start it:
+2. Start monitoring, which also starts the database, then the app:
 
    ```sh
    docker compose --profile monitoring up -d
    ```
 
-   In development, if starting the app also started the database, stopping the app stops monitoring too.
+   Starting the app doesn't start monitoring. Start monitoring first: when the app starts the database itself, stopping the app stops all of Compose's services, monitoring included.
 
-3. Create the dashboard and alert. In the stack's Grafana, create a service account with the Admin role and a token for it, add `GRAFANA_URL` (like `https://your-stack.grafana.net`) and `GRAFANA_SERVICE_ACCOUNT_TOKEN` to `.env`, and run:
+3. Create the dashboard and alert, from any machine with curl 7.76 or later and jq. In the stack's Grafana, create a service account with the Admin role and a token for it, with a short expiry. Then, with `GRAFANA_URL` (like `https://your-stack.grafana.net`), `GRAFANA_SERVICE_ACCOUNT_TOKEN` and `ALERT_HOST` set:
 
    ```sh
-   set -a; . ./.env; set +a
    monitoring/publish.sh
    ```
 
-   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and the alert from `monitoring/alert-rule.json`. The alert, Skystream metrics stopped, fires 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped: a series counts as gone only after 5 minutes without data. It notifies the stack's default contact point, so check that it's an address you read (Alerting → Contact points). The token is needed only for this step and can be deleted afterwards.
+   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and the alert from `monitoring/alert-rule.json`.
+   - **What the alert watches:** only `ALERT_HOST`, the host whose app it watches, as listed under Host on the dashboard. That way a laptop still reporting can't hide the server going quiet.
+   - **When it fires:** 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped. A series counts as gone only after 5 minutes without data.
+   - **Who it notifies:** the stack's default contact point, so check that it's an address you read (Alerting → Contact points).
 
 ## External database
 

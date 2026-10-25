@@ -20,6 +20,10 @@ services:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
     profiles: [monitoring]
     depends_on: [postgres-db]
+    restart: unless-stopped
+    labels:
+      # Not a service the app connects to.
+      org.springframework.boot.ignore: "true"
     environment:
       DATA_SOURCE_URI: postgres-db:5432/skystream_db?sslmode=disable
       DATA_SOURCE_USER: local_user
@@ -32,10 +36,11 @@ services:
   alloy:
     image: grafana/alloy:v1.20.1
     profiles: [monitoring]
-    depends_on: [postgres-exporter]
-    # The host's network, to reach the app's local-only management port.
+    restart: unless-stopped
+    labels:
+      org.springframework.boot.ignore: "true"
+    # The host's network, to reach the app's local-only management port. The UI stays on this machine only.
     network_mode: host
-    pid: host
     # Taken from .env.
     environment:
       - GRAFANA_CLOUD_PROMETHEUS_URL
