@@ -135,6 +135,35 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 
 Timers have an `outcome` tag: `success`, `error` or `cancel`. The search timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 170 series, built-in ones included.
 
+### Sending metrics to Grafana Cloud
+
+The Compose file's `monitoring` profile runs [Grafana Alloy](https://grafana.com/docs/alloy/), which scrapes the app, the host (CPU, memory, disk, network) and PostgreSQL (through `postgres-exporter`: table and index sizes, dead rows, autovacuum runs) once a minute, and sends the metrics to Grafana Cloud. The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 170 from the app, about 480 from PostgreSQL, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Linux (WSL included). Its own status page is at `http://127.0.0.1:12345`.
+
+1. Create a free Grafana Cloud stack. On its Prometheus details page, find the remote write URL, the username, and create an access policy token with the `metrics:write` scope. Add them to `.env`:
+
+   ```sh
+   GRAFANA_CLOUD_PROMETHEUS_URL=https://…/api/prom/push
+   GRAFANA_CLOUD_PROMETHEUS_USER=123456
+   GRAFANA_CLOUD_TOKEN=glc_…
+   ```
+
+2. With the app running, start monitoring. Starting the app doesn't start it:
+
+   ```sh
+   docker compose --profile monitoring up -d
+   ```
+
+   In development, if starting the app also started the database, stopping the app stops monitoring too.
+
+3. Create the dashboard and alert. In the stack's Grafana, create a service account with the Admin role and a token for it, add `GRAFANA_URL` (like `https://your-stack.grafana.net`) and `GRAFANA_SERVICE_ACCOUNT_TOKEN` to `.env`, and run:
+
+   ```sh
+   set -a; . ./.env; set +a
+   monitoring/publish.sh
+   ```
+
+   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and the alert from `monitoring/alert-rule.json`. The alert, Skystream metrics stopped, fires 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped: a series counts as gone only after 5 minutes without data. It notifies the stack's default contact point, so check that it's an address you read (Alerting → Contact points). The token is needed only for this step and can be deleted afterwards.
+
 ## External database
 
 Supply these Spring properties through configuration or environment variables:

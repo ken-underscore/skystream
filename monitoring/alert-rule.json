@@ -1,0 +1,31 @@
+{
+  "uid": "skystream-metrics-stopped",
+  "title": "Skystream metrics stopped",
+  "folderUID": "skystream",
+  "ruleGroup": "skystream",
+  "condition": "C",
+  "for": "5m",
+  "noDataState": "Alerting",
+  "execErrState": "Error",
+  "annotations": {
+    "summary": "Skystream's metrics stopped: the app, Alloy or the server is down."
+  },
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "DATASOURCE_UID",
+      "relativeTimeRange": {"from": 300, "to": 0},
+      "model": {"refId": "A", "expr": "max(up{job=\"skystream\"})", "instant": true}
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "refId": "C",
+        "type": "threshold",
+        "expression": "A",
+        "conditions": [{"evaluator": {"type": "lt", "params": [1]}}]
+      }
+    }
+  ]
+}
