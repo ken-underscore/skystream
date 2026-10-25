@@ -4,7 +4,6 @@ import static com.example.skystream.repository.WordBucketRepository.SNAPSHOT_WIN
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -13,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.service.WordSnapshotService;
 
 import reactor.core.publisher.Flux;
@@ -28,7 +28,7 @@ public class BucketController {
         value = "/api/word-buckets",
         produces = MediaType.TEXT_EVENT_STREAM_VALUE
     )
-    public Flux<Map<String, Long>> wordBuckets(@RequestParam(defaultValue = "30") int windowSeconds,
+    public Flux<WordSnapshot> wordBuckets(@RequestParam(defaultValue = "30") int windowSeconds,
             @RequestParam(defaultValue = "0") int refreshIntervalMs) {
         if (!SNAPSHOT_WINDOW_SECONDS.contains(windowSeconds)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,

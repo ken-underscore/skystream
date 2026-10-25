@@ -4,15 +4,16 @@ export function connectStream(demo: boolean, windowSeconds: number, refreshInter
     onStatus('Demo mode');
     const words = 'bluesky community music books art science nature coffee games space garden ocean travel movies technology friends photography weather coding cats dogs food sports culture learning design stories morning weekend stars creativity language city forest birds flowers conversation ideas discovery'.split(' ');
     const bucket = () => Object.fromEntries(words.map(word => [word, 1 + Math.floor(Math.random() ** 2 * 100)]));
-    // Synthetic history lets all six windows work immediately in the demo.
+    // An hour of synthetic history lets every window work immediately in the demo; longer windows scale it up.
     const history = Array.from({ length: 3600 / 5 }, bucket);
+    const scale = Math.max(1, windowSeconds / 3600);
     const send = () => {
       if (closed) return;
       const counts: Record<string, number> = {};
-      for (const bucket of history.slice(-windowSeconds / 5)) {
-        for (const [word, count] of Object.entries(bucket)) counts[word] = (counts[word] ?? 0) + count;
+      for (const bucket of history.slice(-Math.min(windowSeconds, 3600) / 5)) {
+        for (const [word, count] of Object.entries(bucket)) counts[word] = (counts[word] ?? 0) + count * scale;
       }
-      onBucket(JSON.stringify(counts));
+      onBucket(JSON.stringify({ words: counts, collectedSeconds: windowSeconds }));
     };
     send();
     const timer = window.setInterval(() => {
