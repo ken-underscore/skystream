@@ -31,7 +31,7 @@ class SearchService {
         return Timing.timed(expander.expand(query)
                 .flatMap(hypothetical -> Mono.fromCallable(() -> searchVector(query, hypothetical))
                         .subscribeOn(Schedulers.boundedElastic()))
-                .flatMapMany(vector -> posts.nearest(vector, RESULTS)), registry, "skystream.search");
+                .flatMapMany(vector -> posts.nearest(vector, RESULTS)), registry, "skystream.search.query");
     }
 
     private float[] searchVector(String query, List<String> hypothetical) {

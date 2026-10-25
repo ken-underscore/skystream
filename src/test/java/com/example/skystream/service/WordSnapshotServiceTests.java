@@ -30,6 +30,7 @@ import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.repository.WordBucketRepository.Tier;
 
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -114,6 +115,12 @@ class WordSnapshotServiceTests {
         awaitSnapshot(10);
         assertEquals(2, registry.get("skystream.ingestion.save").tag("outcome", "success").timer().count());
         assertEquals(2, registry.get("skystream.snapshots.refresh").tag("tier", "five_seconds").timer().count());
+        // The 5-minute tier refreshes on a worker of its own, which nothing above waited for.
+        Mono.fromSupplier(() -> registry.find("skystream.snapshots.refresh").tag("tier", "five_minutes").timers().stream()
+                        .mapToLong(Timer::count).sum())
+                .filter(count -> count > 0)
+                .repeatWhenEmpty(repeat -> repeat.delayElements(Duration.ofMillis(20)))
+                .block(timeout);
         assertEquals(1, registry.get("skystream.snapshots.refresh").tag("tier", "five_minutes").timer().count());
         double lag = registry.get("skystream.ingestion.lag").timeGauge().value(TimeUnit.SECONDS);
         double expected = Duration.between(start.plusSeconds(10), Instant.now()).toSeconds();

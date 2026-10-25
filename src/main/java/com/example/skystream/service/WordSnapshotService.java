@@ -57,13 +57,14 @@ public class WordSnapshotService {
      * minutes for 5-minute ones. Query work runs separately from ingestion; if it falls behind, it keeps the newest.
      */
     private Disposable refresh(Tier tier) {
+        String tierTag = tier.name().toLowerCase(Locale.ROOT);
         return refreshRequests.asFlux()
                 .map(tier::bucketStart)
                 .distinctUntilChanged()
                 .publishOn(Schedulers.parallel())
                 .onBackpressureLatest()
                 .concatMap(newest -> Timing.timed(Mono.defer(() -> repository.snapshots(tier, newest)), registry,
-                                "skystream.snapshots.refresh", "tier", tier.name().toLowerCase(Locale.ROOT))
+                                "skystream.snapshots.refresh", "tier", tierTag)
                         .retryWhen(databaseRetry())
                         .doOnNext(windows -> caches.get(tier).tryEmitNext(windows))
                         .onErrorResume(error -> {

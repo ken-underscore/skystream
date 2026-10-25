@@ -14,9 +14,8 @@ import com.anthropic.models.messages.ThinkingConfigDisabled;
 import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
-import com.example.skystream.Timing;
-
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import reactor.core.publisher.Mono;
 
 /**
@@ -52,9 +51,8 @@ class QueryExpander {
     Mono<List<String>> expand(String query) {
         // Concurrent searches for one query share a call. Failed calls aren't cached, and a call that outlasts the
         // timeout keeps running, so its posts are cached for the next search.
-        // Timed before the fallback, so a failure or timeout counts as an error.
-        return Timing.timed(Mono.fromFuture(() -> cache.get(normalize(query), (key, executor) -> write(query)), true)
-                .timeout(timeout), registry, "skystream.search.expansion")
+        return Mono.fromFuture(() -> cache.get(normalize(query), (key, executor) -> write(query)), true)
+                .timeout(timeout)
                 .onErrorResume(error -> {
                     log.warn("Could not expand a query, so searching with it alone: {}", error.toString());
                     return Mono.just(List.of());
@@ -70,12 +68,15 @@ class QueryExpander {
                 .outputConfig(Expansion.class)
                 .addUserMessage(PROMPT.formatted(POSTS, query))
                 .build();
+        // Times Haiku's call to its end, even past the search's timeout. Cached expansions aren't timed.
+        var sample = Timer.start(registry);
         return anthropic.messages().create(params).thenApply(message -> {
             Expansion expansion = message.content().stream().flatMap(block -> block.text().stream()).findFirst()
                     .orElseThrow(() -> new IllegalStateException("No text in a " + message.stopReason() + " reply"))
                     .text();
             return expansion.posts().stream().filter(post -> !post.isBlank()).limit(POSTS).toList();
-        });
+        }).whenComplete((posts, error) -> sample.stop(
+                registry.timer("skystream.search.expansion", "outcome", error == null ? "success" : "error")));
     }
 
     /** The query as cached: trimmed, lowercase, and with each run of whitespace a single space. */

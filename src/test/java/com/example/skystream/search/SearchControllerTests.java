@@ -128,7 +128,7 @@ class SearchControllerTests {
     }
 
     private long searchTimes(String outcome) {
-        return registry.get("skystream.search").tag("outcome", outcome).timer().count();
+        return registry.get("skystream.search.query").tag("outcome", outcome).timer().count();
     }
 
     @Test

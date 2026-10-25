@@ -38,7 +38,8 @@ class EmbeddingWorker implements AutoCloseable {
     private final Disposable backlogLog;
     private final Counter embedded;
     private final Counter failed;
-    private volatile PostRepository.Backlog backlog;
+    private volatile double backlogPosts = Double.NaN;
+    private volatile double backlogAgeSeconds = Double.NaN;
 
     /** Fetches up to {@code batchSize} posts at a time, and waits {@code idle} after a batch that wasn't full. */
     EmbeddingWorker(PostRepository posts, Embedder embedder, int batchSize, Duration idle, MeterRegistry registry) {
@@ -47,10 +48,11 @@ class EmbeddingWorker implements AutoCloseable {
         this.batchSize = batchSize;
         embedded = registry.counter("skystream.search.embeddings", "outcome", "embedded");
         failed = registry.counter("skystream.search.embeddings", "outcome", "failed");
-        Gauge.builder("skystream.search.backlog", this, worker -> worker.backlog == null ? Double.NaN : worker.backlog.posts())
-                .description("Posts waiting for an embedding").register(registry);
-        TimeGauge.builder("skystream.search.backlog.age", this, TimeUnit.MILLISECONDS, EmbeddingWorker::backlogAgeMillis)
-                .description("How long ago the oldest post waiting for an embedding was seen").register(registry);
+        Gauge.builder("skystream.search.backlog", this, worker -> worker.backlogPosts).baseUnit("posts")
+                .description("Posts waiting for an embedding, at the last reading").register(registry);
+        TimeGauge.builder("skystream.search.backlog.age", this, TimeUnit.SECONDS, worker -> worker.backlogAgeSeconds)
+                .description("How long before the last reading the oldest post waiting for an embedding was seen")
+                .register(registry);
         work = Mono.defer(this::embedNewest)
                 .flatMap(fetched -> fetched < batchSize ? Mono.delay(idle).thenReturn(fetched) : Mono.just(fetched))
                 .repeat()
@@ -61,10 +63,7 @@ class EmbeddingWorker implements AutoCloseable {
         // A query slower than a minute skips the ticks it overlaps, rather than failing the interval.
         backlogLog = Flux.interval(Duration.ZERO, Duration.ofMinutes(1)).onBackpressureDrop()
                 .concatMap(tick -> posts.backlog(Instant.now().minus(PostRepository.RETENTION))
-                        .doOnNext(backlog -> {
-                            this.backlog = backlog;
-                            logBacklog(backlog);
-                        })
+                        .doOnNext(this::record)
                         .onErrorResume(error -> {
                             log.warn("Could not read the embedding backlog", error);
                             return Mono.empty();
@@ -81,10 +80,10 @@ class EmbeddingWorker implements AutoCloseable {
                 .flatMap(batch -> Mono.fromCallable(() -> embed(batch)).subscribeOn(embedding)
                         .flatMap(result -> posts.saveEmbeddings(result.embeddings())
                                 .then(posts.markEmbeddingFailed(result.failedUris()))
-                                .then(Mono.fromRunnable(() -> {
+                                .doOnSuccess(saved -> {
                                     embedded.increment(result.embeddings().size());
                                     failed.increment(result.failedUris().size());
-                                })))
+                                }))
                         .thenReturn(batch.size()))
                 .defaultIfEmpty(0);
     }
@@ -121,18 +120,15 @@ class EmbeddingWorker implements AutoCloseable {
         }
     }
 
-    private double backlogAgeMillis() {
-        var current = backlog;
-        if (current == null) return Double.NaN;
-        return current.oldestSeenAt() == null ? 0 : Duration.between(current.oldestSeenAt(), Instant.now()).toMillis();
-    }
-
-    private static void logBacklog(PostRepository.Backlog backlog) {
+    /** Keeps the reading for the gauges, measuring its age now rather than when they're read, and logs it. */
+    private void record(PostRepository.Backlog backlog) {
+        long age = backlog.oldestSeenAt() == null ? 0 : Duration.between(backlog.oldestSeenAt(), Instant.now()).toSeconds();
+        backlogPosts = backlog.posts();
+        backlogAgeSeconds = age;
         if (backlog.oldestSeenAt() == null) {
             log.info("Embedding backlog: 0 posts");
         } else {
-            log.info("Embedding backlog: {} posts, oldest seen {}s ago", backlog.posts(),
-                    Duration.between(backlog.oldestSeenAt(), Instant.now()).toSeconds());
+            log.info("Embedding backlog: {} posts, oldest seen {}s ago", backlog.posts(), age);
         }
     }
 

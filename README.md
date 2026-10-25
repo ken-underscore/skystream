@@ -126,14 +126,14 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 | `skystream_ingestion_lag_seconds` | How far behind now the newest saved 5-second bucket starts: up to 5 seconds plus Jetstream's own delay while keeping up, more while catching up. |
 | `skystream_ingestion_save_seconds` | Saving each batch, per attempt. |
 | `skystream_snapshots_refresh_seconds{tier}` | Refreshing each tier's word cloud windows, per attempt. |
-| `skystream_expiry_seconds{data}`, `skystream_expiry_deleted_total{data}` | Each expiry run, and the rows it deleted: `word_buckets` or `search_posts`. |
-| `skystream_search_backlog`, `skystream_search_backlog_age_seconds` | Posts waiting for an embedding, and how long ago the oldest was seen. Read at startup and every minute. |
+| `skystream_expiry_seconds{data}`, `skystream_expiry_deleted_rows_total{data}` | Each expiry run, and the rows it deleted: `search_posts`, or `word_buckets`, counting bucket rows, whose words go with them. |
+| `skystream_search_backlog_posts`, `skystream_search_backlog_age_seconds` | Posts waiting for an embedding, and how long before the reading the oldest was seen. Read at startup and every minute. |
 | `skystream_search_embeddings_total{outcome}` | Posts `embedded`, or `failed` and skipped. Its rate is the embedding speed. |
-| `skystream_search_seconds` | Searches, from the query to the results. |
-| `skystream_search_expansion_seconds` | Query expansion, cached ones included. A failure or timeout, which falls back to the plain query, is an `error`. |
-| `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text. Cached answers aren't timed. |
+| `skystream_search_query_seconds` | Searches, from the query to the results. |
+| `skystream_search_expansion_seconds` | Haiku's query expansions, timed to the end even when the search stopped waiting after 5 seconds. Cached expansions aren't timed. |
+| `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text sent. Cached answers aren't timed. |
 
-Timers have an `outcome` tag: `success`, `error` or `cancel`. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 120 series.
+Timers have an `outcome` tag: `success`, `error` or `cancel`. The search timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 170 series, built-in ones included.
 
 ## External database
 

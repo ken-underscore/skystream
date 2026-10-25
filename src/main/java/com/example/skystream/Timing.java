@@ -10,15 +10,16 @@ import reactor.core.publisher.Mono;
 
 /**
  * Times each subscription, so each retry is timed on its own, and tags it with how it ended: {@code outcome} is
- * {@code success}, {@code error} or {@code cancel}. The time is recorded before the result is passed on, so it excludes
- * what subscribers do with it.
+ * {@code success}, {@code error} or {@code cancel}. The time is recorded before the ending is passed on. For a Mono that
+ * excludes what subscribers do with its value; a Flux's time includes the subscribers' handling of each element.
  */
 public final class Timing {
     private Timing() {}
 
     public static <T> Mono<T> timed(Mono<T> mono, MeterRegistry registry, String name, String... tags) {
+        var allTags = Tags.of(tags);
         return Mono.defer(() -> {
-            var timing = new Run(registry, name, tags);
+            var timing = new Run(registry, name, allTags);
             return mono.doOnSuccess(value -> timing.end("success"))
                     .doOnError(error -> timing.end("error"))
                     .doOnCancel(() -> timing.end("cancel"));
@@ -26,8 +27,9 @@ public final class Timing {
     }
 
     public static <T> Flux<T> timed(Flux<T> flux, MeterRegistry registry, String name, String... tags) {
+        var allTags = Tags.of(tags);
         return Flux.defer(() -> {
-            var timing = new Run(registry, name, tags);
+            var timing = new Run(registry, name, allTags);
             return flux.doOnComplete(() -> timing.end("success"))
                     .doOnError(error -> timing.end("error"))
                     .doOnCancel(() -> timing.end("cancel"));
@@ -42,10 +44,10 @@ public final class Timing {
         private final Timer.Sample sample;
         private final AtomicBoolean ended = new AtomicBoolean();
 
-        Run(MeterRegistry registry, String name, String[] tags) {
+        Run(MeterRegistry registry, String name, Tags tags) {
             this.registry = registry;
             this.name = name;
-            this.tags = Tags.of(tags);
+            this.tags = tags;
             this.sample = Timer.start(registry);
         }
 
