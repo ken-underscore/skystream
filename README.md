@@ -153,24 +153,28 @@ The free tier allows 10,000 active series and keeps 14 days. This setup sends ab
    GRAFANA_CLOUD_TOKEN=glc_…
    ```
 
-2. Start monitoring, which also starts the database, then the app:
+2. Start monitoring, which also starts the database, then start the app separately:
 
    ```sh
    docker compose --profile monitoring up -d
+   ./mvnw spring-boot:run
    ```
 
-   Starting the app doesn't start monitoring. Start monitoring first: when the app starts the database itself, stopping the app stops all of Compose's services, monitoring included.
+   Compose runs the database and monitoring, not the app, and starting the app doesn't start monitoring. Start monitoring first: when the app starts the database itself, stopping the app stops all of Compose's services, monitoring included.
 
-3. Create the dashboard and alert, from any machine with curl 7.76 or later and jq. In the stack's Grafana, create a service account with the Admin role and a token for it, with a short expiry. Then, with `GRAFANA_URL` (like `https://your-stack.grafana.net`), `GRAFANA_SERVICE_ACCOUNT_TOKEN` and `ALERT_HOST` set:
+3. Create the dashboard and alert, from any machine with curl 7.76 or later and jq. In the stack's Grafana, create a service account with the Admin role and a token for it, with a short expiry. The script reads its settings from the environment, not `.env`:
 
    ```sh
+   export GRAFANA_URL=https://your-stack.grafana.net
+   export GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_…
+   export ALERT_HOST=your-server-hostname
    monitoring/publish.sh
    ```
 
    It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and the alert from `monitoring/alert-rule.json`.
    - **What the alert watches:** only `ALERT_HOST`, the host whose app it watches, as listed under Host on the dashboard. That way a laptop still reporting can't hide the server going quiet.
    - **When it fires:** 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped. A series counts as gone only after 5 minutes without data.
-   - **Who it notifies:** the stack's default contact point, so check that it's an address you read (Alerting → Contact points).
+   - **Who it notifies:** whatever the default notification policy names. A new stack's may name an empty contact point, which notifies no one. Add a contact point you read (Alerting → Contact points) and set it on the default policy (Alerting → Notification policies).
 
 ## External database
 
