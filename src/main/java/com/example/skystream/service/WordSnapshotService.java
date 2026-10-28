@@ -54,8 +54,9 @@ public class WordSnapshotService {
     }
 
     /**
-     * Refreshes the tier's windows each time its newest bucket changes: after every batch for 5-second buckets, every 5
-     * minutes for 5-minute ones. Query work runs separately from ingestion; if it falls behind, it keeps the newest.
+     * Refreshes the tier's windows each time its newest bucket changes: after every batch for 5-second buckets, every
+     * minute or 5 minutes for the coarser ones. Query work runs separately from ingestion; if it falls behind, it keeps
+     * the newest.
      */
     private Disposable refresh(Tier tier) {
         String tierTag = tier.name().toLowerCase(Locale.ROOT);

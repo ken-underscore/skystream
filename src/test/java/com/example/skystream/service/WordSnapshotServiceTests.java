@@ -2,6 +2,7 @@ package com.example.skystream.service;
 
 import static com.example.skystream.repository.WordBucketRepository.Tier.FIVE_MINUTES;
 import static com.example.skystream.repository.WordBucketRepository.Tier.FIVE_SECONDS;
+import static com.example.skystream.repository.WordBucketRepository.Tier.ONE_MINUTE;
 import static com.example.skystream.repository.WordBucketRepository.SNAPSHOT_WINDOW_SECONDS;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -63,7 +64,7 @@ class WordSnapshotServiceTests {
         return windows(FIVE_SECONDS, value);
     }
 
-    /** Answers each query with the seconds from the start to its newest bucket, for both tiers. */
+    /** Answers each query with the seconds from the start to its newest bucket, for every tier. */
     private void countsSecondsSinceStart() {
         when(repository.snapshots(any(), any())).thenAnswer(invocation -> {
             Instant end = invocation.getArgument(1);
@@ -73,7 +74,9 @@ class WordSnapshotServiceTests {
 
     @BeforeEach
     void longWindowsAnswerZero() {
-        when(repository.snapshots(eq(FIVE_MINUTES), any())).thenAnswer(invocation -> Mono.just(windows(FIVE_MINUTES, 0)));
+        for (Tier tier : List.of(ONE_MINUTE, FIVE_MINUTES)) {
+            when(repository.snapshots(eq(tier), any())).thenAnswer(invocation -> Mono.just(windows(tier, 0)));
+        }
     }
 
     private void successfulSaves() {
@@ -137,22 +140,30 @@ class WordSnapshotServiceTests {
                 .mapToObj(i -> service.updates(SNAPSHOT_WINDOW_SECONDS.get(i % SNAPSHOT_WINDOW_SECONDS.size()), Duration.ofMinutes(1)).next()).toList();
         StepVerifier.create(Flux.merge(visitors)).expectNextCount(100).verifyComplete();
         verify(repository, times(1)).snapshots(eq(FIVE_SECONDS), any());
+        verify(repository, times(1)).snapshots(eq(ONE_MINUTE), any());
         verify(repository, times(1)).snapshots(eq(FIVE_MINUTES), any());
     }
 
     @Test
-    void longWindowsRefreshOnlyWhenANewFiveMinuteBucketStarts() {
+    void longWindowsRefreshOnlyWhenANewCoarseBucketStarts() {
         successfulSaves();
         countsSecondsSinceStart();
-        // Batches end at :05, :10 and 5:00. The first two share the five-minute bucket starting at :00.
-        for (int i : new int[]{0, 1, 59}) service.persistBatches(Flux.just(batch(i))).blockLast(timeout);
+        // Batches end at :05, :10, 1:00 and 5:00. The first two share the minute starting at :00; the first three share
+        // the five minutes starting at :00.
+        for (int i : new int[]{0, 1, 11, 59}) service.persistBatches(Flux.just(batch(i))).blockLast(timeout);
         awaitSnapshot(300);
-        assertEquals(Map.of("hello", 300L), service.updates(86400, Duration.ZERO).map(WordSnapshot::words)
-                .filter(Map.of("hello", 300L)::equals).next().block(timeout));
+        for (int window : new int[]{3600, 86400}) {
+            assertEquals(Map.of("hello", 300L), service.updates(window, Duration.ZERO).map(WordSnapshot::words)
+                    .filter(Map.of("hello", 300L)::equals).next().block(timeout));
+        }
+        verify(repository).snapshots(ONE_MINUTE, start);
+        verify(repository).snapshots(ONE_MINUTE, start.plusSeconds(60));
+        verify(repository).snapshots(ONE_MINUTE, start.plusSeconds(300));
+        verify(repository, times(3)).snapshots(eq(ONE_MINUTE), any());
         verify(repository).snapshots(FIVE_MINUTES, start);
         verify(repository).snapshots(FIVE_MINUTES, start.plusSeconds(300));
         verify(repository, times(2)).snapshots(eq(FIVE_MINUTES), any());
-        verify(repository, times(3)).snapshots(eq(FIVE_SECONDS), any());
+        verify(repository, times(4)).snapshots(eq(FIVE_SECONDS), any());
     }
 
     @Test
@@ -179,10 +190,10 @@ class WordSnapshotServiceTests {
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(1);
         service.persistBatches(Flux.just(batch(1))).blockLast(timeout);
-        assertEquals(Map.of("hello", 1L), service.updates(3600, Duration.ZERO).next().block(timeout).words());
+        assertEquals(Map.of("hello", 1L), service.updates(600, Duration.ZERO).next().block(timeout).words());
         pending.tryEmitValue(windows(2));
         awaitSnapshot(2);
-        assertEquals(Map.of("hello", 2L), service.updates(3600, Duration.ZERO).next().block(timeout).words());
+        assertEquals(Map.of("hello", 2L), service.updates(600, Duration.ZERO).next().block(timeout).words());
     }
 
     @Test

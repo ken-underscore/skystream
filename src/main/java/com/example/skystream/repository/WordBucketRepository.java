@@ -30,10 +30,12 @@ import reactor.core.publisher.Mono;
 public class WordBucketRepository {
     /**
      * Word counts kept at one bucket size, and the windows read from them. Each batch adds its counts to every tier, so a
-     * long window sums a few hundred coarse buckets rather than thousands of 5-second ones.
+     * long window sums a few hundred coarse buckets rather than thousands of 5-second ones, and refreshes only when a
+     * new coarse bucket starts.
      */
     public enum Tier {
-        FIVE_SECONDS("word_bucket", "bucket_word", 5, List.of(30, 60, 300, 600, 1800, 3600)),
+        FIVE_SECONDS("word_bucket", "bucket_word", 5, List.of(30, 60, 300, 600)),
+        ONE_MINUTE("word_bucket_1m", "bucket_word_1m", 60, List.of(1800, 3600)),
         FIVE_MINUTES("word_bucket_5m", "bucket_word_5m", 300, List.of(10800, 28800, 86400));
 
         private final String buckets;
@@ -84,6 +86,12 @@ public class WordBucketRepository {
             Arrays.stream(Tier.values()).flatMap(tier -> tier.windowSeconds().stream()).toList();
     /** Words kept per window: the browser draws at most this many. */
     public static final int TOP_WORDS = 100;
+    /**
+     * A word's count in one bucket is far below int's limit. Summed as int, each total is a plain 64-bit number; summed
+     * as the column's bigint, it's a 128-bit value allocated per word and window, and the 24-hour query took 3.1 s
+     * rather than 1.9 s.
+     */
+    private static final String BUCKET_COUNT_SUM = "SUM(count::int)";
 
     private final DatabaseClient database;
     private final PostRepository posts;
@@ -216,7 +224,7 @@ public class WordBucketRepository {
                     GROUP BY word
                 )
                 %s
-                """.formatted(windowColumns(tier, "SUM(count)", "bucket_started_at"), tier.words(), tier.longestWindow(), tops))
+                """.formatted(windowColumns(tier, BUCKET_COUNT_SUM, "bucket_started_at"), tier.words(), tier.longestWindow(), tops))
                 .bind("end", end.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> new WindowCount(row.get("seconds", Integer.class), row.get("word", String.class),
                         row.get("count", Long.class)))
@@ -243,7 +251,7 @@ public class WordBucketRepository {
     /** One column per window, {@code seconds_<window>}, aggregating the rows whose {@code time} falls in it. */
     private static String windowColumns(Tier tier, String aggregate, String time) {
         return tier.windowSeconds().stream()
-                .map(seconds -> "%s FILTER (WHERE %s >= :end - INTERVAL '%d seconds')::BIGINT AS seconds_%d"
+                .map(seconds -> "%s FILTER (WHERE %s >= :end - INTERVAL '%d seconds') AS seconds_%d"
                         .formatted(aggregate, time, seconds, seconds))
                 .collect(Collectors.joining(", "));
     }

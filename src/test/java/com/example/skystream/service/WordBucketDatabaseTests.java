@@ -2,6 +2,7 @@ package com.example.skystream.service;
 
 import static com.example.skystream.repository.WordBucketRepository.Tier.FIVE_MINUTES;
 import static com.example.skystream.repository.WordBucketRepository.Tier.FIVE_SECONDS;
+import static com.example.skystream.repository.WordBucketRepository.Tier.ONE_MINUTE;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
@@ -109,7 +110,7 @@ class WordBucketDatabaseTests {
 
     @BeforeEach
     void clearDatabase() {
-        database.sql("TRUNCATE word_bucket, word_bucket_5m, search_post CASCADE").fetch().rowsUpdated()
+        database.sql("TRUNCATE word_bucket, word_bucket_1m, word_bucket_5m, search_post CASCADE").fetch().rowsUpdated()
                 .then(database.sql("UPDATE consumer_checkpoint SET latest_seq = 0, max_bucket_started_at = NULL WHERE id = 1")
                         .fetch().rowsUpdated()).block(timeout);
     }
@@ -282,6 +283,19 @@ class WordBucketDatabaseTests {
     }
 
     @Test
+    void hourWindowsEndAtTheNewestMinuteAndSayHowMuchIsCollected() {
+        // The newest bucket starts at 3630 s, so the windows end at 3600 s, excluding the incomplete minute there.
+        // Minutes exist at 0, 1800 and 3540 s, so 2 and 3 minutes of the windows are collected.
+        repository.saveBatch(batch(0, 10, 3630, bucket(0, Map.of("hour", 1)), bucket(1800, Map.of("half-hour", 2)),
+                bucket(3595, Map.of("last-minute", 3)), bucket(3600, Map.of("current", 4)),
+                bucket(3630, Map.of("newest", 5)))).block(timeout);
+        assertEquals(Map.of(
+                1800, new WordSnapshot(Map.of("half-hour", 2L, "last-minute", 3L), 120),
+                3600, new WordSnapshot(Map.of("half-hour", 2L, "last-minute", 3L, "hour", 1L), 180)),
+                repository.snapshots(ONE_MINUTE, origin.plusSeconds(3630)).block(timeout));
+    }
+
+    @Test
     void eachWindowKeepsItsTopWordsBreakingTiesAlphabetically() {
         var old = IntStream.range(0, 100).boxed().collect(Collectors.toMap(i -> "old-" + i, i -> 1000));
         var recent = new HashMap<>(Map.of("tie-b", 5, "tie-a", 5));
@@ -314,10 +328,12 @@ class WordBucketDatabaseTests {
     }
 
     @Test
-    void addsEachBucketToItsFiveMinuteTotalCorrectionsIncluded() {
+    void addsEachBucketToItsMinuteAndFiveMinuteTotalsCorrectionsIncluded() {
         repository.saveBatch(batch(0, 10, 300, bucket(0, Map.of("hello", 1)), bucket(295, Map.of("hello", 2, "world", 1)),
                 bucket(300, Map.of("hello", 4)))).block(timeout);
         repository.saveBatch(batch(10, 12, 305, bucket(5, Map.of("late", 1)), bucket(305, Map.of()))).block(timeout);
+        assertEquals(Map.of(0L, Map.of("hello", 1L, "late", 1L), 240L, Map.of("hello", 2L, "world", 1L),
+                300L, Map.of("hello", 4L)), stored(ONE_MINUTE));
         assertEquals(Map.of(0L, Map.of("hello", 3L, "world", 1L, "late", 1L), 300L, Map.of("hello", 4L)),
                 stored(FIVE_MINUTES));
     }
@@ -325,14 +341,18 @@ class WordBucketDatabaseTests {
     @Test
     void expiresBucketsPastEachTiersLongestWindowFromTheNewestBucket() {
         repository.expire().block(timeout);  // Nothing to measure from yet.
-        // The newest bucket starts at 90150 s. Five-second buckets reach back an hour, to 86550 s. Five-minute ones
-        // reach back 24 hours from the start of the newest 5-minute bucket, 90000 s, to 3600 s.
+        // The newest bucket starts at 90150 s. Five-second buckets reach back 10 minutes, to 89550 s. One-minute ones
+        // reach back an hour from the start of the newest minute, 90120 s, to 86520 s. Five-minute ones reach back 24
+        // hours from the start of the newest 5-minute bucket, 90000 s, to 3600 s.
         repository.saveBatch(batch(0, 10, 90150, bucket(3300, Map.of("a", 1)), bucket(3600, Map.of("b", 1)),
-                bucket(86545, Map.of("c", 1)), bucket(86550, Map.of("d", 1)), bucket(90150, Map.of("e", 1)))).block(timeout);
+                bucket(86515, Map.of("c", 1)), bucket(86520, Map.of("d", 1)), bucket(89545, Map.of("f", 1)),
+                bucket(89550, Map.of("g", 1)), bucket(90150, Map.of("e", 1)))).block(timeout);
         repository.expire().block(timeout);
-        assertEquals(Map.of(86550L, Map.of("d", 1L), 90150L, Map.of("e", 1L)), stored(FIVE_SECONDS));
-        assertEquals(Map.of(3600L, Map.of("b", 1L), 86400L, Map.of("c", 1L, "d", 1L), 90000L, Map.of("e", 1L)),
-                stored(FIVE_MINUTES));
+        assertEquals(Map.of(89550L, Map.of("g", 1L), 90150L, Map.of("e", 1L)), stored(FIVE_SECONDS));
+        assertEquals(Map.of(86520L, Map.of("d", 1L), 89520L, Map.of("f", 1L, "g", 1L), 90120L, Map.of("e", 1L)),
+                stored(ONE_MINUTE));
+        assertEquals(Map.of(3600L, Map.of("b", 1L), 86400L, Map.of("c", 1L, "d", 1L), 89400L, Map.of("f", 1L, "g", 1L),
+                90000L, Map.of("e", 1L)), stored(FIVE_MINUTES));
     }
 
     @Test
