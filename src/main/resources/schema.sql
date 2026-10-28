@@ -10,6 +10,19 @@ CREATE TABLE IF NOT EXISTS bucket_word (
     CONSTRAINT bucket_word_started_at_word_pk PRIMARY KEY (bucket_started_at, word)
 );
 
+-- The same counts per minute, for the 30-minute and 1-hour windows.
+CREATE TABLE IF NOT EXISTS word_bucket_1m (
+    started_at TIMESTAMPTZ CONSTRAINT word_bucket_1m_started_at_pk PRIMARY KEY,
+    CHECK (EXTRACT(EPOCH FROM started_at) % 60 = 0)
+);
+
+CREATE TABLE IF NOT EXISTS bucket_word_1m (
+    bucket_started_at TIMESTAMPTZ NOT NULL REFERENCES word_bucket_1m(started_at) ON DELETE CASCADE,
+    word TEXT NOT NULL CHECK (length(trim(word)) > 0),
+    count BIGINT NOT NULL CHECK (count > 0),
+    CONSTRAINT bucket_word_1m_started_at_word_pk PRIMARY KEY (bucket_started_at, word)
+);
+
 -- The same counts per 5 minutes, for windows longer than an hour.
 CREATE TABLE IF NOT EXISTS word_bucket_5m (
     started_at TIMESTAMPTZ CONSTRAINT word_bucket_5m_started_at_pk PRIMARY KEY,
