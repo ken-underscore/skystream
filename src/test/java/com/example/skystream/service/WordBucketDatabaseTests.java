@@ -98,7 +98,7 @@ class WordBucketDatabaseTests {
     /** Reads stored counts directly, independent of the production snapshot query. */
     private Map<String, Long> combinedCounts(Instant start, Instant end) {
         return database.sql("""
-                SELECT word, SUM(count)::BIGINT AS total
+                SELECT word, SUM(count) AS total
                 FROM bucket_word
                 WHERE bucket_started_at >= :start AND bucket_started_at < :end
                 GROUP BY word
