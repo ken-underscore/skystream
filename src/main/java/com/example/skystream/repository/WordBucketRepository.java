@@ -86,12 +86,6 @@ public class WordBucketRepository {
             Arrays.stream(Tier.values()).flatMap(tier -> tier.windowSeconds().stream()).toList();
     /** Words kept per window: the browser draws at most this many. */
     public static final int TOP_WORDS = 100;
-    /**
-     * A word's count in one bucket is far below int's limit. Summed as int, each total is a plain 64-bit number; summed
-     * as the column's bigint, it's a 128-bit value allocated per word and window, and the 24-hour query took 3.1 s
-     * rather than 1.9 s.
-     */
-    private static final String BUCKET_COUNT_SUM = "SUM(count::int)";
 
     private final DatabaseClient database;
     private final PostRepository posts;
@@ -162,16 +156,16 @@ public class WordBucketRepository {
 
     private Mono<Void> addWords(Tier tier, Instant start, List<Map.Entry<String, Integer>> entries) {
         String[] words = new String[entries.size()];
-        Long[] counts = new Long[entries.size()];
+        Integer[] counts = new Integer[entries.size()];
         for (int i = 0; i < entries.size(); i++) {
             var entry = entries.get(i);
             words[i] = entry.getKey();
-            counts[i] = entry.getValue().longValue();
+            counts[i] = entry.getValue();
         }
         return database.sql("""
                 INSERT INTO %1$s (bucket_started_at, word, count)
                 SELECT :start, words.word, words.count
-                FROM UNNEST(CAST(:words AS text[]), CAST(:counts AS bigint[])) AS words(word, count)
+                FROM UNNEST(CAST(:words AS text[]), CAST(:counts AS integer[])) AS words(word, count)
                 ON CONFLICT (bucket_started_at, word)
                 DO UPDATE SET count = %1$s.count + EXCLUDED.count
                 """.formatted(tier.words()))
@@ -224,7 +218,7 @@ public class WordBucketRepository {
                     GROUP BY word
                 )
                 %s
-                """.formatted(windowColumns(tier, BUCKET_COUNT_SUM, "bucket_started_at"), tier.words(), tier.longestWindow(), tops))
+                """.formatted(windowColumns(tier, "SUM(count)", "bucket_started_at"), tier.words(), tier.longestWindow(), tops))
                 .bind("end", end.atOffset(ZoneOffset.UTC))
                 .map((row, metadata) -> new WindowCount(row.get("seconds", Integer.class), row.get("word", String.class),
                         row.get("count", Long.class)))
