@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,27 @@ class JetstreamConsumerWebSocketTests {
                             .doOnNext(message -> received.set(message.getPayloadAsText())).then()))
                     .expectComplete().verify(timeout);
             assertEquals(payload, received.get());
+        } finally {
+            server.disposeNow(timeout);
+        }
+    }
+
+    @Test
+    void endsAConnectionThatGoesQuiet() {
+        Duration timeout = Duration.ofSeconds(10);
+        // Sends one frame, then keeps the connection open without sending anything more.
+        var server = HttpServer.create().host("127.0.0.1").port(0)
+                .handle((request, response) -> response.sendWebsocket(
+                        (inbound, outbound) -> outbound.sendString(Mono.just("first")).then(Mono.never())))
+                .bindNow(timeout);
+        try {
+            var received = new AtomicReference<String>();
+            var client = JetstreamConsumer.createWebSocketClient();
+            StepVerifier.create(client.execute(URI.create("ws://127.0.0.1:" + server.port()),
+                    session -> JetstreamConsumer.receive(session, Duration.ofMillis(200))
+                            .doOnNext(message -> received.set(message.getPayloadAsText())).then()))
+                    .expectError(TimeoutException.class).verify(timeout);
+            assertEquals("first", received.get());
         } finally {
             server.disposeNow(timeout);
         }
