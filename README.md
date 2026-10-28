@@ -123,7 +123,7 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 
 | Metric | What it measures |
 |---|---|
-| `skystream_ingestion_lag_seconds` | How far behind now the newest saved 5-second bucket starts: up to 5 seconds plus Jetstream's own delay while keeping up, more while catching up. |
+| `skystream_ingestion_lag_seconds` | How far behind now the newest saved 5-second bucket starts: up to 5 seconds plus Jetstream's own delay while keeping up, more while catching up. Before the first save, the time since startup. |
 | `skystream_ingestion_save_seconds` | Saving each batch, per attempt. |
 | `skystream_snapshots_refresh_seconds{tier}` | Refreshing each tier's word cloud windows, per attempt. |
 | `skystream_expiry_seconds{data}`, `skystream_expiry_deleted_rows_total{data}` | Each expiry run, and the rows it deleted: `search_posts`, or `word_buckets`, counting bucket rows, whose words go with them. |
@@ -162,7 +162,7 @@ The free tier allows 10,000 active series and keeps 14 days. This setup sends ab
 
    Compose runs the database and monitoring, not the app, and starting the app doesn't start monitoring. Start monitoring first: when the app starts the database itself, stopping the app stops all of Compose's services, monitoring included.
 
-3. Create the dashboard and alert, from any machine with curl 7.76 or later and jq. In the stack's Grafana, create a service account with the Admin role and a token for it, with a short expiry. The script reads its settings from the environment, not `.env`:
+3. Create the dashboard and alerts, from any machine with curl 7.76 or later and jq. In the stack's Grafana, create a service account with the Admin role and a token for it, with a short expiry. The script reads its settings from the environment, not `.env`:
 
    ```sh
    export GRAFANA_URL=https://your-stack.grafana.net
@@ -171,9 +171,10 @@ The free tier allows 10,000 active series and keeps 14 days. This setup sends ab
    monitoring/publish.sh
    ```
 
-   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and the alert from `monitoring/alert-rule.json`.
-   - **What the alert watches:** only `ALERT_HOST`, the host whose app it watches, as listed under Host on the dashboard. That way a laptop still reporting can't hide the server going quiet.
-   - **When it fires:** 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped. A series counts as gone only after 5 minutes without data.
+   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and two alerts from `monitoring/alert-rules.json`.
+   - **What the alerts watch:** only `ALERT_HOST`, the host whose app they watch, as listed under Host on the dashboard. That way a laptop still reporting can't hide the server going quiet.
+   - **Metrics stopped** fires 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped. A series counts as gone only after 5 minutes without data.
+   - **Ingestion behind** fires about 10 minutes after ingestion stops while the app still answers scrapes, or when it's still more than 5 minutes behind 5 minutes into catching up after downtime.
    - **Who it notifies:** whatever the default notification policy names. A new stack's may name an empty contact point, which notifies no one. Add a contact point you read (Alerting → Contact points) and set it on the default policy (Alerting → Notification policies).
 
 ## External database

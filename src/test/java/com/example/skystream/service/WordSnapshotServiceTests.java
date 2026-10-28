@@ -108,7 +108,7 @@ class WordSnapshotServiceTests {
     void timesSavesAndRefreshesAndReportsHowFarBehindTheNewestSavedBucketIs() {
         successfulSaves();
         countsSecondsSinceStart();
-        assertTrue(Double.isNaN(registry.get("skystream.ingestion.lag").timeGauge().value()));
+        assertEquals(0, registry.get("skystream.ingestion.lag").timeGauge().value(TimeUnit.SECONDS), 2);
         service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
         awaitSnapshot(5);
         service.persistBatches(Flux.just(batch(1))).blockLast(timeout);

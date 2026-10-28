@@ -40,13 +40,14 @@ public class WordSnapshotService {
     private final Sinks.Many<Instant> refreshRequests = Sinks.many().multicast().onBackpressureBuffer();
     private final Map<Tier, Sinks.Many<Map<Integer, WordSnapshot>>> caches = new EnumMap<>(Tier.class);
     private final Disposable cacheRefresh;
-    private volatile Instant newestSaved;
+    // Startup until the first save, so a stall right after startup still shows as growing lag.
+    private volatile Instant newestSaved = Instant.now();
 
     public WordSnapshotService(WordBucketRepository repository, MeterRegistry registry) {
         this.repository = repository;
         this.registry = registry;
         TimeGauge.builder("skystream.ingestion.lag", this, TimeUnit.MILLISECONDS, WordSnapshotService::lagMillis)
-                .description("How far behind now the newest saved 5-second bucket starts").register(registry);
+                .description("How far behind now the newest saved 5-second bucket starts, or since startup before the first save").register(registry);
         for (Tier tier : Tier.values()) caches.put(tier, Sinks.many().replay().latest());
         // Each tier has its own worker, so a slow 24-hour query doesn't hold up the 30-second window.
         cacheRefresh = Disposables.composite(Arrays.stream(Tier.values()).map(this::refresh).toList());
@@ -88,8 +89,7 @@ public class WordSnapshotService {
 
     /** Up to 5 seconds plus Jetstream's own delay while keeping up; how far behind ingestion is while catching up. */
     private double lagMillis() {
-        Instant newest = newestSaved;
-        return newest == null ? Double.NaN : Duration.between(newest, Instant.now()).toMillis();
+        return Duration.between(newestSaved, Instant.now()).toMillis();
     }
 
     public Flux<WordSnapshot> updates(int windowSeconds, Duration refreshInterval) {
