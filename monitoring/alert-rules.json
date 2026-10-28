@@ -1,0 +1,64 @@
+[
+  {
+    "uid": "skystream-metrics-stopped",
+    "title": "Skystream metrics stopped",
+    "folderUID": "skystream",
+    "ruleGroup": "skystream",
+    "condition": "C",
+    "for": "5m",
+    "noDataState": "Alerting",
+    "execErrState": "Error",
+    "annotations": {
+      "summary": "Skystream's metrics stopped: the app, Alloy or the server is down."
+    },
+    "data": [
+      {
+        "refId": "A",
+        "datasourceUid": "DATASOURCE_UID",
+        "relativeTimeRange": {"from": 300, "to": 0},
+        "model": {"refId": "A", "expr": "max(up{job=\"skystream\",host=\"ALERT_HOST\"})", "instant": true}
+      },
+      {
+        "refId": "C",
+        "datasourceUid": "__expr__",
+        "model": {
+          "refId": "C",
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [{"evaluator": {"type": "lt", "params": [1]}}]
+        }
+      }
+    ]
+  },
+  {
+    "uid": "skystream-ingestion-behind",
+    "title": "Skystream ingestion behind",
+    "folderUID": "skystream",
+    "ruleGroup": "skystream",
+    "condition": "C",
+    "for": "5m",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "annotations": {
+      "summary": "Skystream's ingestion is more than 5 minutes behind Jetstream: it stalled, or is catching up after downtime."
+    },
+    "data": [
+      {
+        "refId": "A",
+        "datasourceUid": "DATASOURCE_UID",
+        "relativeTimeRange": {"from": 300, "to": 0},
+        "model": {"refId": "A", "expr": "max(skystream_ingestion_lag_seconds{host=\"ALERT_HOST\"})", "instant": true}
+      },
+      {
+        "refId": "C",
+        "datasourceUid": "__expr__",
+        "model": {
+          "refId": "C",
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [{"evaluator": {"type": "gt", "params": [300]}}]
+        }
+      }
+    ]
+  }
+]
