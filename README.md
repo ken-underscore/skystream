@@ -65,7 +65,7 @@ Each worker publishes the immutable snapshots for its windows together only afte
 
 ## Reconnects
 
-`JetstreamConsumer` always uses the same configured Jetstream host. On error or normal upstream disconnect it reloads the checkpoint and reconnects with `cursor=latestSeq`. The raw cursor is inclusive, so that event is received again and skipped. Each session gets a fresh accumulator initialized from durable progress.
+`JetstreamConsumer` always uses the same configured Jetstream host. On error, normal upstream disconnect, or 30 seconds without a frame it reloads the checkpoint and reconnects with `cursor=latestSeq`. Silence that long means the connection died without closing; the time also runs while a batch saves, so a save that slow reconnects too, and the replay saves it again. The raw cursor is inclusive, so that event is received again and skipped. Each session gets a fresh accumulator initialized from durable progress.
 
 The WebSocket client accepts frame payloads up to 1 MiB, allowing Jetstream events larger than Reactor Netty's default 64 KiB limit.
 

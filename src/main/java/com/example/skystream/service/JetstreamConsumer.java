@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.reactive.socket.WebSocketMessage;
+import org.springframework.web.reactive.socket.WebSocketSession;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
 
@@ -61,6 +62,13 @@ public class JetstreamConsumer {
         "?kinds=commit&collections=app.bsky.feed.post"
     );
 
+    /**
+     * Jetstream sends several posts a second, so going this long without a frame means the connection died without
+     * closing. Ending it lets the retry reconnect from the checkpoint. The time runs while a batch saves, too, since no
+     * frame is read until it's done: a save this slow also reconnects, and the replay saves that batch again.
+     */
+    private static final Duration IDLE_TIMEOUT = Duration.ofSeconds(30);
+
     @EventListener(ApplicationReadyEvent.class)
     public void connectToApi() {
         if (!enabled || (connection != null && !connection.isDisposed())) return;
@@ -68,7 +76,7 @@ public class JetstreamConsumer {
                 .repeatWhen(completed -> completed.delayElements(Duration.ofSeconds(1)))
                 .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(1)).maxBackoff(Duration.ofSeconds(30))
                         .filter(error -> !(error instanceof IllegalArgumentException))
-                        .doBeforeRetry(signal -> log.warn("Jetstream disconnected; resuming from database checkpoint", signal.failure())))
+                        .doBeforeRetry(signal -> log.warn("Jetstream connection ended; resuming from database checkpoint", signal.failure())))
                 .subscribe(ignored -> {}, error -> log.error("Jetstream ingestion stopped", error));
     }
 
@@ -80,7 +88,7 @@ public class JetstreamConsumer {
         return client.execute(resumeUri(checkpoint.latestSeq()), session -> {
             log.info("Jetstream connected; resuming after seq={}", checkpoint.latestSeq());
 
-            Flux<JetstreamCommit> commits = session.receive()
+            Flux<JetstreamCommit> commits = receive(session, IDLE_TIMEOUT)
                     .map(WebSocketMessage::getPayloadAsText)
                     .mapNotNull(this::decodeFrame)
                     .map(frame -> {
@@ -117,6 +125,11 @@ public class JetstreamConsumer {
                     });
             return consumeCommits(commits, checkpoint);
         });
+    }
+
+    /** The session's frames, failing with a {@link java.util.concurrent.TimeoutException} after {@code idle} without one. */
+    static Flux<WebSocketMessage> receive(WebSocketSession session, Duration idle) {
+        return session.receive().timeout(idle);
     }
 
     Mono<Void> consumeCommits(Flux<JetstreamCommit> commits) {
