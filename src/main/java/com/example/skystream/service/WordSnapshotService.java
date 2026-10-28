@@ -4,7 +4,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,12 +15,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 
+import com.example.skystream.Timing;
 import com.example.skystream.model.BucketBatch;
 import com.example.skystream.model.ConsumerCheckpoint;
 import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.repository.WordBucketRepository.Tier;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.TimeGauge;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
@@ -31,12 +36,17 @@ import reactor.util.retry.Retry;
 public class WordSnapshotService {
     private static final Logger log = LoggerFactory.getLogger(WordSnapshotService.class);
     private final WordBucketRepository repository;
+    private final MeterRegistry registry;
     private final Sinks.Many<Instant> refreshRequests = Sinks.many().multicast().onBackpressureBuffer();
     private final Map<Tier, Sinks.Many<Map<Integer, WordSnapshot>>> caches = new EnumMap<>(Tier.class);
     private final Disposable cacheRefresh;
+    private volatile Instant newestSaved;
 
-    public WordSnapshotService(WordBucketRepository repository) {
+    public WordSnapshotService(WordBucketRepository repository, MeterRegistry registry) {
         this.repository = repository;
+        this.registry = registry;
+        TimeGauge.builder("skystream.ingestion.lag", this, TimeUnit.MILLISECONDS, WordSnapshotService::lagMillis)
+                .description("How far behind now the newest saved 5-second bucket starts").register(registry);
         for (Tier tier : Tier.values()) caches.put(tier, Sinks.many().replay().latest());
         // Each tier has its own worker, so a slow 24-hour query doesn't hold up the 30-second window.
         cacheRefresh = Disposables.composite(Arrays.stream(Tier.values()).map(this::refresh).toList());
@@ -47,12 +57,14 @@ public class WordSnapshotService {
      * minutes for 5-minute ones. Query work runs separately from ingestion; if it falls behind, it keeps the newest.
      */
     private Disposable refresh(Tier tier) {
+        String tierTag = tier.name().toLowerCase(Locale.ROOT);
         return refreshRequests.asFlux()
                 .map(tier::bucketStart)
                 .distinctUntilChanged()
                 .publishOn(Schedulers.parallel())
                 .onBackpressureLatest()
-                .concatMap(newest -> Mono.defer(() -> repository.snapshots(tier, newest))
+                .concatMap(newest -> Timing.timed(Mono.defer(() -> repository.snapshots(tier, newest)), registry,
+                                "skystream.snapshots.refresh", "tier", tierTag)
                         .retryWhen(databaseRetry())
                         .doOnNext(windows -> caches.get(tier).tryEmitNext(windows))
                         .onErrorResume(error -> {
@@ -65,10 +77,19 @@ public class WordSnapshotService {
 
     public Flux<ConsumerCheckpoint> persistBatches(Flux<BucketBatch> batches) {
         // No prefetch: don't accumulate another batch while its predecessor is still committing.
-        return batches.concatMap(batch -> repository.saveBatch(batch)
+        return batches.concatMap(batch -> Timing.timed(repository.saveBatch(batch), registry, "skystream.ingestion.save")
                 .retryWhen(databaseRetry())
                 .filter(checkpoint -> checkpoint.latestSeq() == batch.latestSeq()), 0)
-                .doOnNext(checkpoint -> refreshRequests.tryEmitNext(checkpoint.maxBucketStart()));
+                .doOnNext(checkpoint -> {
+                    newestSaved = checkpoint.maxBucketStart();
+                    refreshRequests.tryEmitNext(newestSaved);
+                });
+    }
+
+    /** Up to 5 seconds plus Jetstream's own delay while keeping up; how far behind ingestion is while catching up. */
+    private double lagMillis() {
+        Instant newest = newestSaved;
+        return newest == null ? Double.NaN : Duration.between(newest, Instant.now()).toMillis();
     }
 
     public Flux<WordSnapshot> updates(int windowSeconds, Duration refreshInterval) {

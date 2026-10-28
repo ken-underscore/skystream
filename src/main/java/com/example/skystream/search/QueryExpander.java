@@ -14,6 +14,8 @@ import com.anthropic.models.messages.ThinkingConfigDisabled;
 import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import reactor.core.publisher.Mono;
 
 /**
@@ -35,12 +37,14 @@ class QueryExpander {
 
     private final AnthropicClientAsync anthropic;
     private final Duration timeout;
+    private final MeterRegistry registry;
     private final AsyncCache<String, List<String>> cache = Caffeine.newBuilder()
             .maximumSize(10_000).expireAfterWrite(Duration.ofDays(1)).buildAsync();
 
-    QueryExpander(AnthropicClientAsync anthropic, Duration timeout) {
+    QueryExpander(AnthropicClientAsync anthropic, Duration timeout, MeterRegistry registry) {
         this.anthropic = anthropic;
         this.timeout = timeout;
+        this.registry = registry;
     }
 
     /** Up to three hypothetical posts for the query, or none if Haiku fails or takes longer than the timeout. */
@@ -64,12 +68,15 @@ class QueryExpander {
                 .outputConfig(Expansion.class)
                 .addUserMessage(PROMPT.formatted(POSTS, query))
                 .build();
+        // Times Haiku's call to its end, even past the search's timeout. Cached expansions aren't timed.
+        var sample = Timer.start(registry);
         return anthropic.messages().create(params).thenApply(message -> {
             Expansion expansion = message.content().stream().flatMap(block -> block.text().stream()).findFirst()
                     .orElseThrow(() -> new IllegalStateException("No text in a " + message.stopReason() + " reply"))
                     .text();
             return expansion.posts().stream().filter(post -> !post.isBlank()).limit(POSTS).toList();
-        });
+        }).whenComplete((posts, error) -> sample.stop(
+                registry.timer("skystream.search.expansion", "outcome", error == null ? "success" : "error")));
     }
 
     /** The query as cached: trimmed, lowercase, and with each run of whitespace a single space. */

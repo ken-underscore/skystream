@@ -176,14 +176,15 @@ public class WordBucketRepository {
     /**
      * Deletes the buckets each tier's longest window no longer reaches, with their words. Like the windows, this is
      * measured from the newest bucket rather than the clock, so catching up after downtime keeps what the windows show.
+     * Returns how many buckets were deleted.
      */
-    public Mono<Void> expire() {
+    public Mono<Long> expire() {
         return checkpoint().mapNotNull(ConsumerCheckpoint::maxBucketStart)
                 .flatMapMany(newest -> Flux.just(Tier.values()).concatMap(tier -> database
                         .sql("DELETE FROM " + tier.buckets() + " WHERE started_at < :cutoff")
                         .bind("cutoff", tier.bucketStart(newest).minusSeconds(tier.longestWindow()).atOffset(ZoneOffset.UTC))
                         .fetch().rowsUpdated()))
-                .then();
+                .reduce(0L, Long::sum);
     }
 
     /**

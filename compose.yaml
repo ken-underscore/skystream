@@ -9,10 +9,52 @@ services:
       POSTGRES_USER: local_user
       POSTGRES_PASSWORD: local_password
       POSTGRES_DB: skystream_db
+    # A random port on this machine only: a server must not expose the database.
     ports:
-      - "5432"
+      - "127.0.0.1::5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # Monitoring starts only with the monitoring profile: docker compose --profile monitoring up -d
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    profiles: [monitoring]
+    depends_on: [postgres-db]
+    restart: unless-stopped
+    labels:
+      # Not a service the app connects to.
+      org.springframework.boot.ignore: "true"
+    environment:
+      DATA_SOURCE_URI: postgres-db:5432/skystream_db?sslmode=disable
+      DATA_SOURCE_USER: local_user
+      DATA_SOURCE_PASS: local_password
+    # Every server setting would be a series of its own.
+    command: [--no-collector.settings]
+    ports:
+      - "127.0.0.1:9187:9187"
+
+  alloy:
+    image: grafana/alloy:v1.20.1
+    profiles: [monitoring]
+    restart: unless-stopped
+    labels:
+      org.springframework.boot.ignore: "true"
+    # The host's network, to reach the app's local-only management port. The UI stays on this machine only.
+    network_mode: host
+    # Taken from .env.
+    environment:
+      - GRAFANA_CLOUD_PROMETHEUS_URL
+      - GRAFANA_CLOUD_PROMETHEUS_USER
+      - GRAFANA_CLOUD_TOKEN
+    command: [run, --server.http.listen-addr=127.0.0.1:12345, --storage.path=/var/lib/alloy/data, /etc/alloy/config.alloy]
+    volumes:
+      - ./monitoring/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+      - /run/udev/data:/run/udev/data:ro
+
 volumes:
   postgres_data:
+  alloy_data:

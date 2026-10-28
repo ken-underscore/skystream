@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -29,6 +30,8 @@ import com.example.skystream.model.WordSnapshot;
 import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.repository.WordBucketRepository.Tier;
 
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -37,7 +40,8 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 
 class WordSnapshotServiceTests {
     private final WordBucketRepository repository = mock(WordBucketRepository.class);
-    private final WordSnapshotService service = new WordSnapshotService(repository);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final WordSnapshotService service = new WordSnapshotService(repository, registry);
     private final Instant start = Instant.parse("2026-10-04T12:00:00Z");
     private final Duration timeout = Duration.ofSeconds(5);
 
@@ -98,6 +102,29 @@ class WordSnapshotServiceTests {
                 })
                 .expectNext(Map.of("hello", 12L)).verifyComplete();
         verify(repository).snapshots(FIVE_SECONDS, start.plusSeconds(5));
+    }
+
+    @Test
+    void timesSavesAndRefreshesAndReportsHowFarBehindTheNewestSavedBucketIs() {
+        successfulSaves();
+        countsSecondsSinceStart();
+        assertTrue(Double.isNaN(registry.get("skystream.ingestion.lag").timeGauge().value()));
+        service.persistBatches(Flux.just(batch(0))).blockLast(timeout);
+        awaitSnapshot(5);
+        service.persistBatches(Flux.just(batch(1))).blockLast(timeout);
+        awaitSnapshot(10);
+        assertEquals(2, registry.get("skystream.ingestion.save").tag("outcome", "success").timer().count());
+        assertEquals(2, registry.get("skystream.snapshots.refresh").tag("tier", "five_seconds").timer().count());
+        // The 5-minute tier refreshes on a worker of its own, which nothing above waited for.
+        Mono.fromSupplier(() -> registry.find("skystream.snapshots.refresh").tag("tier", "five_minutes").timers().stream()
+                        .mapToLong(Timer::count).sum())
+                .filter(count -> count > 0)
+                .repeatWhenEmpty(repeat -> repeat.delayElements(Duration.ofMillis(20)))
+                .block(timeout);
+        assertEquals(1, registry.get("skystream.snapshots.refresh").tag("tier", "five_minutes").timer().count());
+        double lag = registry.get("skystream.ingestion.lag").timeGauge().value(TimeUnit.SECONDS);
+        double expected = Duration.between(start.plusSeconds(10), Instant.now()).toSeconds();
+        assertEquals(expected, lag, 2);
     }
 
     @Test
@@ -168,7 +195,7 @@ class WordSnapshotServiceTests {
         // waiting when the slow query finishes. A real worker thread can lag behind this test and fetch :10.
         VirtualTimeScheduler.getOrSet();
         try {
-            timed.set(new WordSnapshotService(repository));
+            timed.set(new WordSnapshotService(repository, new SimpleMeterRegistry()));
             for (int i = 0; i < 3; i++) {
                 assertEquals(i + 1, timed.get().persistBatches(Flux.just(batch(i))).blockLast(timeout).latestSeq());
             }
@@ -231,7 +258,7 @@ class WordSnapshotServiceTests {
         successfulSaves();
         countsSecondsSinceStart();
         return StepVerifier.withVirtualTime(() -> {
-            timed.set(new WordSnapshotService(repository));
+            timed.set(new WordSnapshotService(repository, new SimpleMeterRegistry()));
             return timed.get().updates(30, Duration.ofSeconds(30)).map(WordSnapshot::words);
         }, initialRequest);
     }

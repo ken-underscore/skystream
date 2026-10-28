@@ -6,10 +6,15 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.TimeGauge;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -19,7 +24,8 @@ import reactor.util.retry.Retry;
 
 /**
  * Embeds captured posts newest first, so in a burst fresh posts become searchable first and the older backlog fills
- * in later or expires untouched. Logs the backlog every minute as the measure of how far embedding is behind.
+ * in later or expires untouched. Reads the backlog every minute, the measure of how far embedding is behind, to log it
+ * and report it as metrics.
  */
 class EmbeddingWorker implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(EmbeddingWorker.class);
@@ -30,12 +36,23 @@ class EmbeddingWorker implements AutoCloseable {
     private final Scheduler embedding = Schedulers.newSingle("search-embedding", true);
     private final Disposable work;
     private final Disposable backlogLog;
+    private final Counter embedded;
+    private final Counter failed;
+    private volatile double backlogPosts = Double.NaN;
+    private volatile double backlogAgeSeconds = Double.NaN;
 
     /** Fetches up to {@code batchSize} posts at a time, and waits {@code idle} after a batch that wasn't full. */
-    EmbeddingWorker(PostRepository posts, Embedder embedder, int batchSize, Duration idle) {
+    EmbeddingWorker(PostRepository posts, Embedder embedder, int batchSize, Duration idle, MeterRegistry registry) {
         this.posts = posts;
         this.embedder = embedder;
         this.batchSize = batchSize;
+        embedded = registry.counter("skystream.search.embeddings", "outcome", "embedded");
+        failed = registry.counter("skystream.search.embeddings", "outcome", "failed");
+        Gauge.builder("skystream.search.backlog", this, worker -> worker.backlogPosts).baseUnit("posts")
+                .description("Posts waiting for an embedding, at the last reading").register(registry);
+        TimeGauge.builder("skystream.search.backlog.age", this, TimeUnit.SECONDS, worker -> worker.backlogAgeSeconds)
+                .description("How long before the last reading the oldest post waiting for an embedding was seen")
+                .register(registry);
         work = Mono.defer(this::embedNewest)
                 .flatMap(fetched -> fetched < batchSize ? Mono.delay(idle).thenReturn(fetched) : Mono.just(fetched))
                 .repeat()
@@ -44,9 +61,9 @@ class EmbeddingWorker implements AutoCloseable {
                         .doBeforeRetry(signal -> log.warn("Could not embed search posts; retrying", signal.failure())))
                 .subscribe();
         // A query slower than a minute skips the ticks it overlaps, rather than failing the interval.
-        backlogLog = Flux.interval(Duration.ofMinutes(1)).onBackpressureDrop()
+        backlogLog = Flux.interval(Duration.ZERO, Duration.ofMinutes(1)).onBackpressureDrop()
                 .concatMap(tick -> posts.backlog(Instant.now().minus(PostRepository.RETENTION))
-                        .doOnNext(EmbeddingWorker::logBacklog)
+                        .doOnNext(this::record)
                         .onErrorResume(error -> {
                             log.warn("Could not read the embedding backlog", error);
                             return Mono.empty();
@@ -61,8 +78,12 @@ class EmbeddingWorker implements AutoCloseable {
         return posts.newestUnembedded(Instant.now().minus(PostRepository.RETENTION), batchSize).collectList()
                 .filter(batch -> !batch.isEmpty())
                 .flatMap(batch -> Mono.fromCallable(() -> embed(batch)).subscribeOn(embedding)
-                        .flatMap(embedded -> posts.saveEmbeddings(embedded.embeddings())
-                                .then(posts.markEmbeddingFailed(embedded.failedUris())))
+                        .flatMap(result -> posts.saveEmbeddings(result.embeddings())
+                                .then(posts.markEmbeddingFailed(result.failedUris()))
+                                .doOnSuccess(saved -> {
+                                    embedded.increment(result.embeddings().size());
+                                    failed.increment(result.failedUris().size());
+                                }))
                         .thenReturn(batch.size()))
                 .defaultIfEmpty(0);
     }
@@ -99,12 +120,15 @@ class EmbeddingWorker implements AutoCloseable {
         }
     }
 
-    private static void logBacklog(PostRepository.Backlog backlog) {
+    /** Keeps the reading for the gauges, measuring its age now rather than when they're read, and logs it. */
+    private void record(PostRepository.Backlog backlog) {
+        long age = backlog.oldestSeenAt() == null ? 0 : Duration.between(backlog.oldestSeenAt(), Instant.now()).toSeconds();
+        backlogPosts = backlog.posts();
+        backlogAgeSeconds = age;
         if (backlog.oldestSeenAt() == null) {
             log.info("Embedding backlog: 0 posts");
         } else {
-            log.info("Embedding backlog: {} posts, oldest seen {}s ago", backlog.posts(),
-                    Duration.between(backlog.oldestSeenAt(), Instant.now()).toSeconds());
+            log.info("Embedding backlog: {} posts, oldest seen {}s ago", backlog.posts(), age);
         }
     }
 

@@ -1,0 +1,66 @@
+// Scrapes the app, its processes, the host and Postgres once a minute, and sends the metrics to Grafana Cloud.
+// Alloy runs on the host's network, so it reaches the app's local-only management port.
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_PROMETHEUS_URL")
+
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_PROMETHEUS_USER")
+      password = sys.env("GRAFANA_CLOUD_TOKEN")
+    }
+  }
+
+  // Tells a local test run apart from the server's.
+  external_labels = {
+    host = constants.hostname,
+  }
+}
+
+prometheus.scrape "skystream" {
+  job_name     = "skystream"
+  targets      = [{"__address__" = "127.0.0.1:8081"}]
+  metrics_path = "/actuator/prometheus"
+  forward_to   = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.scrape "postgres" {
+  job_name   = "postgres"
+  targets    = [{"__address__" = "127.0.0.1:9187"}]
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// Memory and CPU of the app and Postgres. The app's includes memory outside the JVM, such as the embedding model's.
+prometheus.exporter.process "processes" {
+  procfs_path = "/host/proc"
+  // Per-thread series would number in the hundreds for the JVM alone.
+  track_threads = false
+
+  matcher {
+    name    = "skystream"
+    cmdline = ["java .*skystream"]
+  }
+
+  matcher {
+    name = "postgres"
+    comm = ["postgres"]
+  }
+}
+
+prometheus.scrape "processes" {
+  targets    = prometheus.exporter.process.processes.targets
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// CPU, memory, disk and network, read from the host's /proc and /sys mounted into the container.
+prometheus.exporter.unix "host" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+}
+
+// Labelled job="integrations/unix", as Grafana Cloud's Linux dashboards expect.
+prometheus.scrape "host" {
+  targets    = prometheus.exporter.unix.host.targets
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
