@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
@@ -21,20 +23,28 @@ class AggregatorServiceTests {
     private final AggregatorService aggregator = new AggregatorService("true");
     private final Instant origin = Instant.parse("2026-10-04T12:00:00Z");
 
-    private JetstreamCommit commit(long seq, double seconds, String text, String language) {
-        return post(seq, seconds, text, language, null);
+    private Instant at(double seconds) {
+        return origin.plusNanos((long) (seconds * 1_000_000_000));
     }
 
-    private JetstreamCommit post(long seq, double seconds, String text, String language, JsonNode reply) {
+    private JetstreamCommit commit(long seq, double seconds, String text, String language) {
+        return post(seq, seconds, text, language, null, at(seconds).toString());
+    }
+
+    /** An English post arriving {@code seconds} after the origin, saying it was created at {@code createdAt}. */
+    private JetstreamCommit written(long seq, double seconds, String createdAt, String text) {
+        return post(seq, seconds, text, "en", null, createdAt);
+    }
+
+    private JetstreamCommit post(long seq, double seconds, String text, String language, JsonNode reply, String createdAt) {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
-                "2020-01-01T00:00:00Z", origin.plusNanos((long) (seconds * 1_000_000_000)).toString(),
-                "rev", "create", "app.bsky.feed.post", "key" + seq, "cid",
-                new PostRecord("app.bsky.feed.post", text, "2020-01-01T00:00:00Z", new String[]{language}, reply));
+                "2020-01-01T00:00:00Z", at(seconds).toString(), "rev", "create", "app.bsky.feed.post", "key" + seq, "cid",
+                new PostRecord("app.bsky.feed.post", text, createdAt, new String[]{language}, reply));
     }
 
     private JetstreamCommit delete(long seq, double seconds, long deletedSeq) {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
-                "2020-01-01T00:00:00Z", origin.plusNanos((long) (seconds * 1_000_000_000)).toString(),
+                "2020-01-01T00:00:00Z", at(seconds).toString(),
                 "rev", "delete", "app.bsky.feed.post", "key" + deletedSeq, null, null);
     }
 
@@ -135,7 +145,7 @@ class AggregatorServiceTests {
                 commit(1, 0, "Finally   did Sahale Arm yesterday https://example.com/photo", "en"),
                 commit(2, 1, "four words only here https://example.com", "en"),
                 commit(3, 2, "cinq mots en français ici", "fr"),
-                post(4, 3, "a reply with five words", "en", JsonNodeFactory.instance.objectNode()),
+                post(4, 3, "a reply with five words", "en", JsonNodeFactory.instance.objectNode(), at(3).toString()),
                 commit(5, 3, "\u00a0four words, not five", "en"),
                 commit(6, 4, "see https://example.com/a\u00a0the\u3000words after links", "en"),
                 commit(7, 5, "next bucket flushes the batch", "en-US")), ConsumerCheckpoint.empty())
@@ -144,6 +154,27 @@ class AggregatorServiceTests {
                 new SearchPost(uri(6), "see the words after links", origin.plusSeconds(4)),
                 new SearchPost(uri(7), "next bucket flushes the batch", origin.plusSeconds(5))), batch.posts());
         assertEquals(List.of(), batch.deletedUris());
+    }
+
+    @Test
+    void skipsPostsWrittenMoreThanAnHourBeforeTheyArriveButStillFlushesAndAdvancesTheSequence() {
+        var batch = aggregator.createWordBuckets(Flux.just(
+                written(1, 0, at(-3600.001).toString(), "replayed post about the galaxy"),
+                // 10:59:59Z, an hour and two seconds before it arrives.
+                written(2, 1, "2026-10-04T06:59:59-04:00", "backdated post about the nebula"),
+                // Exactly an hour old: kept.
+                written(3, 2, at(2 - 3600).toString(), "delayed post about the comet"),
+                written(4, 3, "yesterday", "undated post about the meteor"),
+                written(5, 3, null, "post with no date about the planet"),
+                // Skipped, but its new bucket still flushes the batch, through its sequence.
+                written(6, 5, at(-7200).toString(), "replayed post about the asteroid")), ConsumerCheckpoint.empty())
+                .blockFirst(Duration.ofSeconds(5));
+        assertEquals(6, batch.latestSeq());
+        var words = batch.buckets().getFirst().words().keySet();
+        assertTrue(Collections.disjoint(words, Set.of("galaxy", "nebula")), words::toString);
+        assertTrue(words.containsAll(Set.of("comet", "meteor", "planet")), words::toString);
+        assertEquals(Map.of(), batch.buckets().getLast().words());
+        assertEquals(List.of(uri(3), uri(4), uri(5)), batch.posts().stream().map(SearchPost::uri).toList());
     }
 
     @Test

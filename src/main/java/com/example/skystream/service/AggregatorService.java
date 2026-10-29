@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -34,6 +35,7 @@ public class AggregatorService {
     private static final Pattern TOKENS = Pattern.compile("\\p{L}+(?:'\\p{L}+)*|\\p{Nd}+");
     private static final Pattern VALID_WORD = Pattern.compile("[a-z]+(?:'[a-z]+)*|[0-9]+");
     private static final Set<String> STOP_WORDS = loadStopWords();
+    private static final Duration MAX_POST_AGE = Duration.ofHours(1);
 
     // Search posts are captured only when search is enabled; otherwise nothing would embed them.
     private final boolean captureSearchPosts;
@@ -95,8 +97,11 @@ public class AggregatorService {
             }
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
             Instant start = Tier.FIVE_SECONDS.bucketStart(witnessedAt);
-            addWords(commit, pending.computeIfAbsent(start, key -> new HashMap<>()));
-            if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
+            var words = pending.computeIfAbsent(start, key -> new HashMap<>());
+            if (!isStale(commit, witnessedAt)) {
+                addWords(commit, words);
+                if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
+            }
             latestProcessedSeq = commit.seq();
 
             if (maxBucketStart == null) {
@@ -132,6 +137,15 @@ public class AggregatorService {
                 SearchPost.from(commit, witnessedAt).ifPresent(post -> posts.put(post.uri(), post));
             }
         }
+    }
+
+    /**
+     * Whether the commit's post says it was written more than {@link #MAX_POST_AGE} before it arrived. Such posts are
+     * mostly an account's whole history sent again at once when it moves to another PDS, or bots backdating what they
+     * post. Counting them would make old topics trend, and search would show them as new.
+     */
+    private static boolean isStale(JetstreamCommit commit, Instant witnessedAt) {
+        return commit.record() != null && commit.record().createdBefore(witnessedAt.minus(MAX_POST_AGE));
     }
 
     private void addWords(JetstreamCommit commit, Map<String, Integer> words) {
