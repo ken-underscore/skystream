@@ -229,7 +229,7 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 
 3. Create `/opt/skystream/app/.env`, readable only by root (`chmod 600`):
    - **Required:** `ANTHROPIC_API_KEY`.
-   - **For running `docker compose` by hand in the checkout:** `COMPOSE_FILE=compose.yaml:deploy/compose.production.yaml`, so commands include the server's additions. `deploy.sh` sets this itself.
+   - **Required:** `COMPOSE_FILE=compose.yaml:deploy/compose.production.yaml`, so `docker compose` commands run by hand in the checkout, such as starting monitoring, include the server's additions. `deploy.sh` sets it itself.
    - **Optional:** `SKYSTREAM_SEARCH_THREADS`, the embedding threads, which default to 2. Use about half the cores, such as `4` on 8.
    - **For metrics:** the three `GRAFANA_CLOUD_*` settings (see Metrics).
 
@@ -244,17 +244,17 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 - Stop any other copy of the app first: it holds ports 8080 and 8081.
 - Copy its `models/` into the new checkout to save the download.
 - Remove its checkout afterwards. Compose would otherwise still recognize the `skystream` project there, and running it could recreate the database container without the server's additions.
-- The database volume carries over, because the project is named `skystream` wherever the checkout is.
+- The database volume carries over, because the project is named `skystream` wherever the checkout is. Before the first deploy, `docker volume ls | grep skystream_postgres_data` should list it.
 
 **Updating:** run `/opt/skystream/app/deploy/deploy.sh` as root. It:
 1. checks out the latest `main`;
 2. builds the jar and the frontend, and fetches the model if it changed;
 3. installs the jar and the service file, then restarts the app;
-4. once the app's own process answers its health check, switches the served frontend to the new build. If the app isn't healthy within 2 minutes, it says so, and the previous frontend stays.
+4. once the app's own process answers its health check, switches the served frontend to the new build, keeping the previous one for pages already loaded from it. If the app isn't healthy within about 2 minutes, it says so, and the previous frontend stays.
 
 The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost. Only one deploy runs at a time.
 
-**Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the commit that added this script; older ones can't run in production.
+**Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the first whose `deploy.sh` re-runs itself after checking out (`--checked-out`). Older ones can't deploy, and can't run in production.
 
 **Logs:** `journalctl -u skystream -f`. A JVM crash leaves `hs_err_pid*.log` in `/var/lib/skystream`.
 

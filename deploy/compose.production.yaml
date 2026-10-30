@@ -9,8 +9,9 @@ services:
     restart: unless-stopped
     ports: !override
       - "127.0.0.1:5432:5432"
-    # So deploy.sh's --wait waits until Postgres accepts connections, not just until its container runs.
+    # So deploy.sh's --wait waits until Postgres accepts connections, not just until its container runs. Over TCP: while
+    # a fresh volume initializes, a temporary server listens on the socket only.
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "local_user", "-d", "skystream_db"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "local_user", "-d", "skystream_db"]
       interval: 2s
       retries: 30
