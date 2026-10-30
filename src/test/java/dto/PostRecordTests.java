@@ -22,11 +22,14 @@ class PostRecordTests {
             "{\"values\": [{\"val\": \"graphic-media\"}]}                                                     | true",
             "{\"values\": [{\"val\": \"spoiler\"}]}                                                           | false",
             "{\"values\": []}                                                                                 | false",
+            // Read leniently: an object of labels counts as well as an array.
+            "{\"values\": {\"a\": {\"val\": \"porn\"}}}                                                         | true",
             "null                                                                                             | false",
             // Malformed labels decode, and don't count.
             "\"porn\"                                                                                         | false",
             "{\"values\": \"porn\"}                                                                           | false",
             "{\"values\": [\"porn\", {\"val\": 1}, {\"val\": [\"porn\"]}, null]}                              | false",
+            "{\"values\": [{\"val\": null}, {}]}                                                                | false",
     })
     void recognizesAdultSelfLabelsAndToleratesMalformedOnes(String labels, boolean adult) {
         assertEquals(adult, withLabels(labels).isLabeledAdult());
