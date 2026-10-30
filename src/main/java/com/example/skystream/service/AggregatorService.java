@@ -98,7 +98,7 @@ public class AggregatorService {
             Instant witnessedAt = Instant.parse(commit.witnessedAt());
             Instant start = Tier.FIVE_SECONDS.bucketStart(witnessedAt);
             var words = pending.computeIfAbsent(start, key -> new HashMap<>());
-            if (!isStale(commit, witnessedAt)) {
+            if (!isExcluded(commit, witnessedAt)) {
                 addWords(commit, words);
                 if (captureSearchPosts) collectSearchPost(commit, witnessedAt);
             }
@@ -140,12 +140,17 @@ public class AggregatorService {
     }
 
     /**
-     * Whether the commit's post says it was written more than {@link #MAX_POST_AGE} before it arrived. Such posts are
-     * mostly an account's whole history sent again at once when it moves to another PDS, or bots backdating what they
-     * post. Counting them would make old topics trend, and search would show them as new.
+     * Whether to leave the commit's post out of both words and search, because:
+     * <ul>
+     * <li>it says it was written more than {@link #MAX_POST_AGE} before it arrived. Such posts are mostly an account's
+     * whole history sent again at once when it moves to another PDS, or bots backdating what they post. Counting them
+     * would make old topics trend, and search would show them as new.</li>
+     * <li>or its author labeled it as adult content or graphic media, which the pages, being public, shouldn't show.</li>
+     * </ul>
      */
-    private static boolean isStale(JetstreamCommit commit, Instant witnessedAt) {
-        return commit.record() != null && commit.record().createdBefore(witnessedAt.minus(MAX_POST_AGE));
+    private static boolean isExcluded(JetstreamCommit commit, Instant witnessedAt) {
+        var record = commit.record();
+        return record != null && (record.createdBefore(witnessedAt.minus(MAX_POST_AGE)) || record.isLabeledAdult());
     }
 
     private void addWords(JetstreamCommit commit, Map<String, Integer> words) {

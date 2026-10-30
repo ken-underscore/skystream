@@ -28,18 +28,26 @@ class AggregatorServiceTests {
     }
 
     private JetstreamCommit commit(long seq, double seconds, String text, String language) {
-        return post(seq, seconds, text, language, null, at(seconds).toString());
+        return post(seq, seconds, text, language, null, at(seconds).toString(), null);
     }
 
     /** An English post arriving {@code seconds} after the origin, saying it was created at {@code createdAt}. */
     private JetstreamCommit written(long seq, double seconds, String createdAt, String text) {
-        return post(seq, seconds, text, "en", null, createdAt);
+        return post(seq, seconds, text, "en", null, createdAt, null);
     }
 
-    private JetstreamCommit post(long seq, double seconds, String text, String language, JsonNode reply, String createdAt) {
+    /** An English post its author labeled {@code label}. */
+    private JetstreamCommit labeled(long seq, double seconds, String label, String text) {
+        var labels = JsonNodeFactory.instance.objectNode().put("$type", "com.atproto.label.defs#selfLabels");
+        labels.putArray("values").addObject().put("$type", "com.atproto.label.defs#selfLabel").put("val", label);
+        return post(seq, seconds, text, "en", null, at(seconds).toString(), labels);
+    }
+
+    private JetstreamCommit post(long seq, double seconds, String text, String language, JsonNode reply, String createdAt,
+            JsonNode labels) {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
                 "2020-01-01T00:00:00Z", at(seconds).toString(), "rev", "create", "app.bsky.feed.post", "key" + seq, "cid",
-                new PostRecord("app.bsky.feed.post", text, createdAt, new String[]{language}, reply));
+                new PostRecord("app.bsky.feed.post", text, createdAt, new String[]{language}, reply, labels));
     }
 
     private JetstreamCommit delete(long seq, double seconds, long deletedSeq) {
@@ -145,7 +153,7 @@ class AggregatorServiceTests {
                 commit(1, 0, "Finally   did Sahale Arm yesterday https://example.com/photo", "en"),
                 commit(2, 1, "four words only here https://example.com", "en"),
                 commit(3, 2, "cinq mots en français ici", "fr"),
-                post(4, 3, "a reply with five words", "en", JsonNodeFactory.instance.objectNode(), at(3).toString()),
+                post(4, 3, "a reply with five words", "en", JsonNodeFactory.instance.objectNode(), at(3).toString(), null),
                 commit(5, 3, "\u00a0four words, not five", "en"),
                 commit(6, 4, "see https://example.com/a\u00a0the\u3000words after links", "en"),
                 commit(7, 5, "next bucket flushes the batch", "en-US")), ConsumerCheckpoint.empty())
@@ -175,6 +183,22 @@ class AggregatorServiceTests {
         assertTrue(words.containsAll(Set.of("comet", "meteor", "planet")), words::toString);
         assertEquals(Map.of(), batch.buckets().getLast().words());
         assertEquals(List.of(uri(3), uri(4), uri(5)), batch.posts().stream().map(SearchPost::uri).toList());
+    }
+
+    @Test
+    void skipsPostsLabeledAsAdultContentButStillFlushesAndAdvancesTheSequence() {
+        var batch = aggregator.createWordBuckets(Flux.just(
+                labeled(1, 0, "porn", "explicit post about the galaxy"),
+                labeled(2, 1, "graphic-media", "graphic post about the nebula"),
+                labeled(3, 2, "spoiler", "spoiler post about the comet"),
+                labeled(4, 5, "sexual", "suggestive post about the asteroid")), ConsumerCheckpoint.empty())
+                .blockFirst(Duration.ofSeconds(5));
+        assertEquals(4, batch.latestSeq());
+        var words = batch.buckets().getFirst().words().keySet();
+        assertTrue(Collections.disjoint(words, Set.of("galaxy", "nebula")), words::toString);
+        assertTrue(words.contains("comet"), words::toString);
+        assertEquals(Map.of(), batch.buckets().getLast().words());
+        assertEquals(List.of(uri(3)), batch.posts().stream().map(SearchPost::uri).toList());
     }
 
     @Test
