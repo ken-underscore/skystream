@@ -1,0 +1,10 @@
+# The server's additions to compose.yaml, used through COMPOSE_FILE in the server's .env (see the README's Deploying).
+# The packaged app doesn't start Compose itself, as it does in development, so Postgres starts on its own after a
+# reboot, on a fixed port the app is configured with.
+name: skystream
+
+services:
+  postgres-db:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:5432:5432"

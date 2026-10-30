@@ -202,3 +202,49 @@ spring.r2dbc.password=your-password
 The database needs the [pgvector](https://github.com/pgvector/pgvector) extension, version 0.7 or later, even with search disabled, because `schema.sql` creates the search table. Creating the extension needs a superuser, so run `CREATE EXTENSION vector;` once as one if the application's user isn't.
 
 Set `skystream.jetstream.enabled=false` to run HTTP/database functionality without upstream ingestion. Frontend setup is described in [its README](src/main/frontend/README.md).
+
+## Deploying
+
+On the server, the app runs as a packaged jar under systemd, and Postgres runs in Docker Compose:
+- **The app:** `deploy/skystream.service` runs it as the `skystream` user with the `production` profile (`src/main/resources/application-production.properties`). It listens only on 127.0.0.1 and restarts after a crash.
+- **Postgres:** `deploy/compose.production.yaml` gives it a fixed local port and a restart policy, so it comes back after a reboot.
+- **Ownership:** the checkout (`/opt/skystream/app`), the model, `.env` and the installed jar (`/opt/skystream/skystream.jar`) all belong to root. The app writes only to `/var/lib/skystream`, so it can't change the code that runs, or the deploy script root runs.
+
+**First-time setup**, on Ubuntu 24.04 as root:
+
+1. Install Java 21, Git, Node 22 with pnpm, and Docker Engine with its Compose plugin ([Docker's instructions](https://docs.docker.com/engine/install/ubuntu/)):
+
+   ```sh
+   apt install -y openjdk-21-jdk-headless git curl
+   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs && npm install -g pnpm@11
+   ```
+
+2. Create the user, clone the repository and fetch the model:
+
+   ```sh
+   useradd --system --home-dir /var/lib/skystream --no-create-home --shell /usr/sbin/nologin skystream
+   git clone https://github.com/ken-underscore/skystream.git /opt/skystream/app
+   cd /opt/skystream/app && scripts/fetch-model.sh
+   ```
+
+3. Create `/opt/skystream/app/.env`, readable only by root (`chmod 600`):
+   - **Always:**
+     - `ANTHROPIC_API_KEY`
+     - `SKYSTREAM_SEARCH_THREADS`: the embedding threads, such as `4` on 8 cores.
+     - `COMPOSE_FILE=compose.yaml:deploy/compose.production.yaml`, so every `docker compose` command in the checkout includes the server's additions.
+   - **For metrics:** the three `GRAFANA_CLOUD_*` settings (see Metrics).
+
+4. Deploy, then start monitoring if wanted:
+
+   ```sh
+   /opt/skystream/app/deploy/deploy.sh
+   cd /opt/skystream/app && docker compose --profile monitoring up -d
+   ```
+
+**Updating:** run `/opt/skystream/app/deploy/deploy.sh` as root. It takes the latest `main` and builds the app and the frontend. It installs the jar and the service file, and restarts the app, waiting until its health check passes. The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost.
+
+**Rolling back:** run `deploy/deploy.sh <commit>` with the commit to go back to.
+
+**Logs:** `journalctl -u skystream -f`.
+
+The database keeps nothing older than 24 hours, so there are no backups. A fresh database starts at Jetstream's live tip.
