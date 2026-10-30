@@ -88,7 +88,7 @@ class WordBucketDatabaseTests {
         return new JetstreamCommit("network.bsky.jetstream.subscribeEvents#commit", seq, "did:test",
                 "2020-01-01T00:00:00Z", origin.plusSeconds(second).toString(), "rev", "create",
                 "app.bsky.feed.post", "key" + seq, "cid" + seq,
-                new PostRecord("app.bsky.feed.post", text, origin.toString(), new String[]{"en"}, null));
+                new PostRecord("app.bsky.feed.post", text, origin.plusSeconds(second).toString(), new String[]{"en"}, null));
     }
 
     private Map<String, Long> awaitSnapshot(Map<String, Long> expected) {
