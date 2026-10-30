@@ -8,22 +8,28 @@ Wants=network-online.target
 [Service]
 # The code, model and settings are root's, so the app can't change what it runs, or what deploy.sh runs as root.
 User=skystream
-WorkingDirectory=/opt/skystream/app
 EnvironmentFile=/opt/skystream/app/.env
-# The model is read from models/ in the working directory.
-ExecStart=/usr/bin/java -XX:+ExitOnOutOfMemoryError -jar /opt/skystream/skystream.jar --spring.profiles.active=production
+# The app's home, and the only place it writes: crash logs, and DJL's native tokenizer library.
+StateDirectory=skystream
+WorkingDirectory=/var/lib/skystream
+Environment=DJL_CACHE_DIR=/var/lib/skystream/djl
+ExecStart=/usr/bin/java -XX:+ExitOnOutOfMemoryError -XX:ErrorFile=/var/lib/skystream/hs_err_pid%%p.log \
+    -jar /opt/skystream/skystream.jar --spring.profiles.active=production
 # Restarts after a crash or running out of memory, but not after systemctl stop.
 Restart=on-failure
 RestartSec=5
 # The JVM exits with 143 when stopped by SIGTERM.
 SuccessExitStatus=143
 
-# The app writes only to its home, /var/lib/skystream, where DJL caches its native tokenizer library.
-StateDirectory=skystream
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

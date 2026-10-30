@@ -1,6 +1,7 @@
-# The server's additions to compose.yaml, used through COMPOSE_FILE in the server's .env (see the README's Deploying).
-# The packaged app doesn't start Compose itself, as it does in development, so Postgres starts on its own after a
-# reboot, on a fixed port the app is configured with.
+# The server's additions to compose.yaml, used through COMPOSE_FILE (see the README's Deploying). The packaged app
+# doesn't start Compose itself, as it does in development, so Postgres starts on its own after a reboot, on a fixed port
+# the app is configured with.
+# The name keeps the project, and so its database volume, the same wherever the checkout is.
 name: skystream
 
 services:
@@ -8,3 +9,8 @@ services:
     restart: unless-stopped
     ports: !override
       - "127.0.0.1:5432:5432"
+    # So deploy.sh's --wait waits until Postgres accepts connections, not just until its container runs.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "local_user", "-d", "skystream_db"]
+      interval: 2s
+      retries: 30
