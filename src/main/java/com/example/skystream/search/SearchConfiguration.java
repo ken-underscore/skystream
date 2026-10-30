@@ -1,7 +1,9 @@
 package com.example.skystream.search;
 
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -42,14 +44,30 @@ public class SearchConfiguration {
         return AnthropicOkHttpClientAsync.builder().apiKey(key).timeout(Duration.ofSeconds(30)).build();
     }
 
+    /**
+     * An uncached search makes two calls, an expansion and an answer, and costs about $0.00025 (log entry 14), so the
+     * default of 8,000 calls is about 4,000 searches, or $1, a day. Days are UTC.
+     */
     @Bean
-    QueryExpander queryExpander(AnthropicClientAsync anthropic, MeterRegistry registry) {
-        return new QueryExpander(anthropic, Duration.ofSeconds(5), registry);
+    DailyBudget dailyBudget(@Value("${skystream.search.daily-haiku-calls:8000}") int calls, MeterRegistry registry) {
+        return new DailyBudget(calls, Clock.systemUTC(), registry);
     }
 
     @Bean
-    AnswerService answerService(AnthropicClientAsync anthropic, MeterRegistry registry) {
-        return new AnswerService(anthropic, Duration.ofSeconds(10), registry);
+    RateLimiter rateLimiter(@Value("${skystream.search.searches-per-minute:10}") int perMinute,
+            @Value("${skystream.search.searches-per-day:100}") int perDay) {
+        return new RateLimiter(Clock.systemUTC(), List.of(new RateLimiter.Limit(perMinute, Duration.ofMinutes(1)),
+                new RateLimiter.Limit(perDay, Duration.ofDays(1))));
+    }
+
+    @Bean
+    QueryExpander queryExpander(AnthropicClientAsync anthropic, DailyBudget budget, MeterRegistry registry) {
+        return new QueryExpander(anthropic, Duration.ofSeconds(5), budget, registry);
+    }
+
+    @Bean
+    AnswerService answerService(AnthropicClientAsync anthropic, DailyBudget budget, MeterRegistry registry) {
+        return new AnswerService(anthropic, Duration.ofSeconds(10), budget, registry);
     }
 
     @Bean

@@ -2,13 +2,17 @@ package com.example.skystream.search;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,35 +36,55 @@ class SearchController {
 
     record AnswerText(String text) {}
 
+    record Limited(long retryAfterSeconds) {}
+
     private final SearchService search;
     private final AnswerService answers;
+    private final RateLimiter limiter;
 
-    SearchController(SearchService search, AnswerService answers) {
+    SearchController(SearchService search, AnswerService answers, RateLimiter limiter) {
         this.search = search;
         this.answers = answers;
+        this.limiter = limiter;
     }
 
+    /** The results, or HTTP 429 with {@code Retry-After} when the client has searched too often. */
     @GetMapping("/api/search")
-    Flux<Result> search(@RequestParam String q) {
-        return search.search(validated(q)).map(Result::of);
+    ResponseEntity<Flux<Result>> search(@RequestParam String q, ServerHttpRequest request) {
+        String query = validated(q);
+        var wait = acquire(request);
+        if (wait.isPresent()) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header(HttpHeaders.RETRY_AFTER, wait.get().toString()).build();
+        }
+        return ResponseEntity.ok(search.search(query).map(Result::of));
     }
 
     /**
      * The results as one {@code results} event, then the answer as {@code answer} events as it's written, ending with
-     * {@code done}, or with {@code failed} if no answer could be written.
+     * {@code done}. It ends with {@code paused} instead when today's budget is spent, or {@code failed} if no answer
+     * could be written. A client that has searched too often gets only a {@code limited} event, since a browser's
+     * {@code EventSource} can't read an HTTP status.
      */
     @GetMapping(value = "/api/search/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    Flux<ServerSentEvent<Object>> searchAndAnswer(@RequestParam String q) {
+    Flux<ServerSentEvent<Object>> searchAndAnswer(@RequestParam String q, ServerHttpRequest request) {
         String query = validated(q);
+        var wait = acquire(request);
+        if (wait.isPresent()) return Flux.just(event("limited", new Limited(wait.get())));
         return search.search(query).collectList().flatMapMany(hits -> Flux.concat(
                 Mono.just(event("results", hits.stream().map(Result::of).toList())),
                 answers.answer(query, hits.stream().map(PostRepository.Hit::post).toList())
                         .map(text -> event("answer", new AnswerText(text)))
                         .concatWith(Mono.just(event("done", Map.of())))
                         .onErrorResume(error -> {
+                            if (error instanceof DailyBudget.SpentException) return Mono.just(event("paused", Map.of()));
                             log.warn("Could not answer a search: {}", error.toString());
                             return Mono.just(event("failed", Map.of()));
                         })));
+    }
+
+    /** Counts a search by the request's client, or returns the seconds, rounded up, until it may search again. */
+    private Optional<Long> acquire(ServerHttpRequest request) {
+        return limiter.tryAcquire(Clients.of(request)).map(wait -> Math.ceilDiv(wait.toMillis(), 1000));
     }
 
     private static String validated(String q) {
