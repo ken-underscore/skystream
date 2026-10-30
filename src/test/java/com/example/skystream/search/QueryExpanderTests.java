@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 
@@ -41,7 +42,8 @@ class QueryExpanderTests {
 
     @Test
     void asksHaikuWithThinkingOffForPostsMatchingASchema() {
-        var posts = expand(new QueryExpander(api.client, timeout, new SimpleMeterRegistry()), "washington state hikes");
+        var posts = expand(new QueryExpander(api.client, timeout, DailyBudgetTests.unlimited(), new SimpleMeterRegistry()),
+                "washington state hikes");
         // Blank posts are dropped, and only the first three kept.
         assertEquals(List.of("Did Rattlesnake Ledge today", "Lake 22 was gorgeous", "Mount Si again"), posts);
         JsonNode request = api.requests.getFirst();
@@ -55,9 +57,19 @@ class QueryExpanderTests {
 
     @Test
     void reusesTheExpansionForTheSameNormalizedQuery() {
-        var expander = new QueryExpander(api.client, timeout, new SimpleMeterRegistry());
+        var expander = new QueryExpander(api.client, timeout, DailyBudgetTests.unlimited(), new SimpleMeterRegistry());
         var first = expand(expander, "Washington  State hikes ");
         assertEquals(first, expand(expander, "washington state hikes"));
+        assertEquals(1, api.requests.size());
+    }
+
+    @Test
+    void fallsBackToNoPostsWithoutCallingHaikuOnceTheBudgetIsSpentButStillServesCachedExpansions() {
+        var expander = new QueryExpander(api.client, timeout, new DailyBudget(1, Clock.systemUTC(), new SimpleMeterRegistry()),
+                new SimpleMeterRegistry());
+        assertEquals(3, expand(expander, "hikes").size());
+        assertEquals(List.of(), expand(expander, "trails"));
+        assertEquals(3, expand(expander, "hikes").size());
         assertEquals(1, api.requests.size());
     }
 
@@ -65,7 +77,7 @@ class QueryExpanderTests {
     void fallsBackToNoPostsOnAnErrorAndAsksAgainNextTime() {
         api.status = 400;
         var registry = new SimpleMeterRegistry();
-        var expander = new QueryExpander(api.client, timeout, registry);
+        var expander = new QueryExpander(api.client, timeout, DailyBudgetTests.unlimited(), registry);
         assertEquals(List.of(), expand(expander, "hikes"));
         api.status = 200;
         assertEquals(3, expand(expander, "hikes").size());
@@ -78,7 +90,7 @@ class QueryExpanderTests {
     @Test
     void fallsBackToNoPostsAfterTheTimeoutAndCachesTheLateReply() {
         api.delay = Duration.ofMillis(800);
-        var expander = new QueryExpander(api.client, Duration.ofMillis(200), new SimpleMeterRegistry());
+        var expander = new QueryExpander(api.client, Duration.ofMillis(200), DailyBudgetTests.unlimited(), new SimpleMeterRegistry());
         long start = System.nanoTime();
         assertEquals(List.of(), expand(expander, "hikes"));
         assertTrue(Duration.ofNanos(System.nanoTime() - start).compareTo(Duration.ofMillis(700)) < 0);

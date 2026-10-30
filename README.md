@@ -122,9 +122,16 @@ set -a; . ./.env; set +a
 `GET /api/search/stream?q=` does the same search, then has Haiku answer the query from the results, as server-sent events:
 - `results`: the results, as above.
 - `answer`: the answer's next piece of text, as `{"text": "…"}`, repeated as Haiku writes it. The answer is 2 to 4 sentences citing results by number, as in `[2]`, and says so when no result is relevant.
-- `done` (`{}`) ends the stream, or `failed` (`{}`) if no answer could be written. With no results, there's no answer.
+- `done` (`{}`) ends the stream, `paused` (`{}`) if today's Haiku budget is spent, or `failed` (`{}`) if no answer could be written. With no results, there's no answer.
+- `limited` (`{"retryAfterSeconds": 40}`) is the only event when the client has searched too often (see below). A browser's `EventSource` can't read an HTTP status, so it comes as an event.
 
 The posts are strangers' words, so the prompt passes them as data inside numbered `<post>` tags, escaped so a post can't close its tag, and tells Haiku never to follow instructions in them. A complete answer is cached by query and the list of results it was written from, so a repeated search whose results haven't changed reuses it. An answer ends with `failed` if Claude returns an error, refuses, stops short of a complete answer, or goes 10 seconds without new text. The frontend's search page, `search.html`, uses this endpoint.
+
+Two limits bound what search spends on Claude:
+- **A rate limit per client:** 10 searches a minute and 100 a day from one address, by default, set with `skystream.search.searches-per-minute` and `skystream.search.searches-per-day`. Each counts in a fixed window that starts with the client's first search in it. Past a limit, `/api/search` returns HTTP 429 with `Retry-After` in seconds, and the stream sends `limited`. A refused or invalid search doesn't count. The client's address comes from `X-Forwarded-For` (`server.forward-headers-strategy=native`), so a public server must be reachable only through a proxy that sets that header.
+- **A daily budget of Haiku calls:** 8,000 by default (`skystream.search.daily-haiku-calls`). An uncached search makes two calls, so that's about 4,000 searches, or $1, a day. Cached expansions and answers don't count. Once the budget is spent, searches skip the expansion, so they use the query alone, and the stream ends with `paused` instead of an answer, until midnight UTC. A warning is logged when it runs out.
+
+Both are kept in memory, so a restart resets them. Set a spending limit in the Anthropic console as well.
 
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
 
@@ -143,6 +150,7 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 | `skystream_search_query_seconds` | Searches, from the query to the results. |
 | `skystream_search_expansion_seconds` | Haiku's query expansions, timed to the end even when the search stopped waiting after 5 seconds. Cached expansions aren't timed. |
 | `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text sent. Cached answers aren't timed. |
+| `skystream_search_haiku_budget_remaining` | Haiku calls left in today's budget. |
 
 Timers have an `outcome` tag: `success`, `error` or `cancel`. The search timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 170 series, built-in ones included.
 
@@ -182,10 +190,11 @@ The free tier allows 10,000 active series and keeps 14 days. This setup sends ab
    monitoring/publish.sh
    ```
 
-   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and two alerts from `monitoring/alert-rules.json`.
+   It creates or updates, in a Skystream folder, the dashboard from `monitoring/dashboard.json` and three alerts from `monitoring/alert-rules.json`.
    - **What the alerts watch:** only `ALERT_HOST`, the host whose app they watch, as listed under Host on the dashboard. That way a laptop still reporting can't hide the server going quiet.
    - **Metrics stopped** fires 5 minutes after the app stops answering scrapes, or about 10 after metrics stop arriving at all because Alloy or the server stopped. A series counts as gone only after 5 minutes without data.
    - **Ingestion behind** fires about 10 minutes after ingestion stops while the app still answers scrapes, or when it's still more than 5 minutes behind 5 minutes into catching up after downtime.
+   - **Haiku budget spent** fires when today's budget of Haiku calls runs out, so searches go without answers until midnight UTC.
    - **Who it notifies:** whatever the default notification policy names. A new stack's may name an empty contact point, which notifies no one. Add a contact point you read (Alerting → Contact points) and set it on the default policy (Alerting → Notification policies).
 
 ## External database

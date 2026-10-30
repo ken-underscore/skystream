@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -33,7 +34,7 @@ class AnswerServiceTests {
         api = new FakeMessagesApi();
         api.contentType = "text/event-stream";
         api.body = FakeMessagesApi.streamed("end_turn", "Hikers loved ", "Sahale Arm [1].");
-        answers = new AnswerService(api.client, Duration.ofSeconds(5), registry);
+        answers = new AnswerService(api.client, Duration.ofSeconds(5), DailyBudgetTests.unlimited(), registry);
     }
 
     @AfterEach
@@ -89,6 +90,18 @@ class AnswerServiceTests {
     }
 
     @Test
+    void failsWithoutCallingHaikuOnceTheBudgetIsSpentButStillServesCachedAnswers() {
+        var limited = new AnswerService(api.client, Duration.ofSeconds(5),
+                new DailyBudget(1, Clock.systemUTC(), new SimpleMeterRegistry()), new SimpleMeterRegistry());
+        limited.answer("washington state hikes", POSTS).blockLast(Duration.ofSeconds(10));
+        assertEquals(List.of("Hikers loved Sahale Arm [1]."),
+                limited.answer("washington state hikes", POSTS).collectList().block(Duration.ofSeconds(10)));
+        assertThrows(DailyBudget.SpentException.class,
+                () -> limited.answer("washington state hikes", POSTS.subList(0, 1)).blockLast(Duration.ofSeconds(10)));
+        assertEquals(1, api.requests.size());
+    }
+
+    @Test
     void answersNothingWithoutPosts() {
         assertEquals(List.of(), answer("washington state hikes", List.of()));
         assertEquals(0, api.requests.size());
@@ -113,7 +126,7 @@ class AnswerServiceTests {
     @Test
     void failsWhenTheStreamStalls() {
         api.delay = Duration.ofSeconds(2);
-        var slow = new AnswerService(api.client, Duration.ofMillis(300), new SimpleMeterRegistry());
+        var slow = new AnswerService(api.client, Duration.ofMillis(300), DailyBudgetTests.unlimited(), new SimpleMeterRegistry());
         long start = System.nanoTime();
         assertThrows(RuntimeException.class, () -> slow.answer("hikes", POSTS).blockLast(Duration.ofSeconds(10)));
         assertTrue(Duration.ofNanos(System.nanoTime() - start).compareTo(Duration.ofSeconds(1)) < 0);

@@ -24,6 +24,14 @@ export function ago(time: string, now = Date.now()): string {
   return minutes < 60 ? relative.format(-minutes, 'minute') : relative.format(-Math.round(minutes / 60), 'hour');
 }
 
+/** When a client that searched too often may search again, as in "in 40 seconds", "in 5 minutes" or "in 3 hours". */
+export function retryIn(value: unknown): string {
+  const { retryAfterSeconds: seconds } = (value ?? {}) as Record<string, unknown>;
+  if (typeof seconds !== 'number' || !(seconds >= 0)) throw new Error('Expected the seconds to wait.');
+  if (seconds < 60) return relative.format(Math.max(1, Math.ceil(seconds)), 'second');
+  return seconds < 3600 ? relative.format(Math.ceil(seconds / 60), 'minute') : relative.format(Math.ceil(seconds / 3600), 'hour');
+}
+
 export function parseAnswerText(value: unknown): string {
   const { text } = (value ?? {}) as Record<string, unknown>;
   if (typeof text !== 'string') throw new Error('Expected answer text.');

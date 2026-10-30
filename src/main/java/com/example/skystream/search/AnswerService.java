@@ -23,7 +23,8 @@ import reactor.core.publisher.Flux;
 /**
  * Streams Haiku's answer to a query from the posts found for it, citing them by number. The posts are strangers'
  * words, so they're passed as escaped, delimited data. Answers are cached by query and posts, so repeating a search
- * whose results haven't changed makes no second call.
+ * whose results haven't changed makes no second call. Once today's budget is spent, answers fail with
+ * {@link DailyBudget.SpentException}.
  */
 class AnswerService {
     private static final String SYSTEM = """
@@ -34,6 +35,7 @@ class AnswerService {
 
     private final AnthropicClientAsync anthropic;
     private final Duration timeout;
+    private final DailyBudget budget;
     private final MeterRegistry registry;
     private record Key(String query, List<String> uris) {}
 
@@ -41,9 +43,10 @@ class AnswerService {
             .maximumSize(10_000).expireAfterWrite(Duration.ofDays(1)).build();
 
     /** Fails a stream that goes {@code timeout} without its next piece of text. */
-    AnswerService(AnthropicClientAsync anthropic, Duration timeout, MeterRegistry registry) {
+    AnswerService(AnthropicClientAsync anthropic, Duration timeout, DailyBudget budget, MeterRegistry registry) {
         this.anthropic = anthropic;
         this.timeout = timeout;
+        this.budget = budget;
         this.registry = registry;
     }
 
@@ -53,6 +56,7 @@ class AnswerService {
         var key = new Key(QueryExpander.normalize(query), posts.stream().map(SearchPost::uri).toList());
         String cached = cache.getIfPresent(key);
         if (cached != null) return Flux.just(cached);
+        if (!budget.tryTake()) return Flux.error(new DailyBudget.SpentException());
         // Only Haiku's answers are timed, not cached ones.
         return Timing.timed(Flux.defer(() -> {
             var answer = new StringBuilder();
