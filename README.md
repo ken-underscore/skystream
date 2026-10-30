@@ -202,3 +202,60 @@ spring.r2dbc.password=your-password
 The database needs the [pgvector](https://github.com/pgvector/pgvector) extension, version 0.7 or later, even with search disabled, because `schema.sql` creates the search table. Creating the extension needs a superuser, so run `CREATE EXTENSION vector;` once as one if the application's user isn't.
 
 Set `skystream.jetstream.enabled=false` to run HTTP/database functionality without upstream ingestion. Frontend setup is described in [its README](src/main/frontend/README.md).
+
+## Deploying
+
+On the server, the app runs as a packaged jar under systemd, and Postgres runs in Docker Compose:
+- **The app:** `deploy/skystream.service` runs it as the `skystream` user with the `production` profile (`src/main/resources/application-production.properties`). It listens only on 127.0.0.1, and restarts after a crash.
+- **Postgres:** `deploy/compose.production.yaml` gives it a fixed local port, a health check and a restart policy, so it comes back after a reboot.
+- **The frontend:** built into `/opt/skystream/www`, for a web server on the same machine to serve, passing `/api/` to the app. That web server, and HTTPS, aren't set up by these steps yet, so the site isn't public until they are.
+- **Ownership:** the checkout (`/opt/skystream/app`), the model, `.env`, the installed jar (`/opt/skystream/skystream.jar`) and the frontend all belong to root. The app writes only to `/var/lib/skystream`, so it can't change the code that runs, or the deploy script root runs.
+
+**First-time setup**, on Ubuntu 24.04 as root:
+
+1. Install Java 21, Git, Node 22 with pnpm, and Docker Engine with its Compose plugin ([Docker's instructions](https://docs.docker.com/engine/install/ubuntu/)):
+
+   ```sh
+   apt update && apt install -y openjdk-21-jdk-headless git curl
+   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs && npm install -g pnpm@11
+   ```
+
+2. Create the user and clone the repository:
+
+   ```sh
+   useradd --system --home-dir /var/lib/skystream --no-create-home --shell /usr/sbin/nologin skystream
+   git clone https://github.com/ken-underscore/skystream.git /opt/skystream/app
+   ```
+
+3. Create `/opt/skystream/app/.env`, readable only by root (`chmod 600`):
+   - **Required:** `ANTHROPIC_API_KEY`.
+   - **Required:** `COMPOSE_FILE=compose.yaml:deploy/compose.production.yaml`, so `docker compose` commands run by hand in the checkout, such as starting monitoring, include the server's additions. `deploy.sh` sets it itself.
+   - **Optional:** `SKYSTREAM_SEARCH_THREADS`, the embedding threads, which default to 2. Use about half the cores, such as `4` on 8.
+   - **For metrics:** the three `GRAFANA_CLOUD_*` settings (see Metrics).
+
+4. Deploy, then start monitoring if wanted:
+
+   ```sh
+   /opt/skystream/app/deploy/deploy.sh
+   cd /opt/skystream/app && docker compose --profile monitoring up -d
+   ```
+
+**Moving from an earlier setup on the same server:**
+- Stop any other copy of the app first: it holds ports 8080 and 8081.
+- Copy its `models/` into the new checkout to save the download.
+- Remove its checkout afterwards. Compose would otherwise still recognize the `skystream` project there, and running it could recreate the database container without the server's additions.
+- The database volume carries over, because the project is named `skystream` wherever the checkout is. Before the first deploy, `docker volume ls | grep skystream_postgres_data` should list it.
+
+**Updating:** run `/opt/skystream/app/deploy/deploy.sh` as root. It:
+1. checks out the latest `main`;
+2. builds the jar and the frontend, and fetches the model if it changed;
+3. installs the jar and the service file, then restarts the app;
+4. once the app's own process answers its health check, switches the served frontend to the new build, keeping the previous one for pages already loaded from it. If the app isn't healthy within about 2 minutes, it says so, and the previous frontend stays.
+
+The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost. Only one deploy runs at a time.
+
+**Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the first whose `deploy.sh` re-runs itself after checking out (`--checked-out`). Older ones can't deploy, and can't run in production.
+
+**Logs:** `journalctl -u skystream -f`. A JVM crash leaves `hs_err_pid*.log` in `/var/lib/skystream`.
+
+The database keeps nothing older than 24 hours, so there are no backups. A fresh database starts at Jetstream's live tip.
