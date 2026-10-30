@@ -31,7 +31,7 @@ class ClientsTests {
 
     @Test
     void countsIpv6ClientsByTheirSlash64() {
-        assertEquals("2001:db8:1:2:0:0:0:0/64", Clients.of(peer("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), List.of()));
-        assertEquals("2001:db8:1:2:0:0:0:0/64", Clients.of(peer("127.0.0.1"), List.of("2001:db8:1:2::1")));
+        assertEquals("2001:db8:1:2::/64", Clients.of(peer("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), List.of()));
+        assertEquals("2001:db8:1:2::/64", Clients.of(peer("127.0.0.1"), List.of("2001:db8:1:2::1")));
     }
 }

@@ -3,7 +3,6 @@ package com.example.skystream.search;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.List;
 
@@ -36,12 +35,8 @@ final class Clients {
         // Only a test's request has no address.
         if (address == null) return "unknown";
         if (!(address instanceof Inet6Address)) return address.getHostAddress();
-        byte[] block = Arrays.copyOf(address.getAddress(), 16);
+        byte[] block = address.getAddress();
         Arrays.fill(block, 8, 16, (byte) 0);
-        try {
-            return InetAddress.getByAddress(block).getHostAddress() + "/64";
-        } catch (UnknownHostException e) {
-            throw new IllegalStateException("16 bytes are an IPv6 address", e);
-        }
+        return NetUtil.bytesToIpAddress(block) + "/64";
     }
 }
