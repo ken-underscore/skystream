@@ -3,14 +3,12 @@ package com.example.skystream.search;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.IntStream;
 
@@ -94,7 +92,7 @@ class SearchControllerTests {
             }
         };
         // Two searches a minute: enough for every test but the one about the limit.
-        var limiter = new RateLimiter(Clock.systemUTC(), List.of(new RateLimiter.Limit(2, Duration.ofMinutes(1))));
+        var limiter = new RateLimiter(new TestClock(seenAt), List.of(new RateLimiter.Limit(2, Duration.ofMinutes(1))));
         client = WebTestClient.bindToController(
                 new SearchController(new SearchService(embedder, repository, expander, registry), answers, limiter)).build();
     }
@@ -211,11 +209,10 @@ class SearchControllerTests {
 
         client.get().uri("/api/search?q={q}", "hikes").exchange()
                 .expectStatus().isEqualTo(429)
-                // The minute started with the first search, a moment ago.
-                .expectHeader().value("Retry-After", seconds -> assertTrue(Set.of("59", "60").contains(seconds), seconds));
+                .expectHeader().valueEquals("Retry-After", "60");
         var events = stream("hikes");
         assertEquals(List.of("limited"), events.stream().map(ServerSentEvent::event).toList());
-        assertTrue(events.getFirst().data().matches("\\{\"retryAfterSeconds\":(59|60)}"), events.getFirst().data());
+        assertEquals("{\"retryAfterSeconds\":60}", events.getFirst().data());
         assertEquals(List.of("hikes", "hikes"), queries);
         // A bad query is refused as such, even from a limited client.
         client.get().uri("/api/search?q={q}", " ").exchange().expectStatus().isBadRequest();

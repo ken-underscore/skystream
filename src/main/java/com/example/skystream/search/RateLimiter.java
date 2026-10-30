@@ -30,34 +30,33 @@ class RateLimiter {
     // Bounds the memory clients spread over many addresses can take; past it, the daily budget still bounds the spend.
     private static final int MAX_CLIENTS = 100_000;
 
+    /** A limit, and each client's current window for it. Caffeine drops a window once it goes that long untouched. */
+    private record Counter(Limit limit, Cache<String, Window> windows) {}
+
     private final Clock clock;
-    private final List<Limit> limits;
-    // For each limit, each client's current window. Caffeine drops a window once it has gone that long unchanged.
-    private final List<Cache<String, Window>> windows;
+    private final List<Counter> counters;
 
     RateLimiter(Clock clock, List<Limit> limits) {
         this.clock = clock;
-        this.limits = List.copyOf(limits);
-        this.windows = limits.stream().map(limit -> Caffeine.newBuilder()
-                .maximumSize(MAX_CLIENTS).expireAfterWrite(limit.window()).<String, Window>build()).toList();
+        this.counters = limits.stream().map(limit -> new Counter(limit, Caffeine.newBuilder()
+                .maximumSize(MAX_CLIENTS).expireAfterWrite(limit.window()).<String, Window>build())).toList();
     }
 
     /** Counts a search by {@code client} against every limit, or, if one is reached, returns how long until it resets. */
     synchronized Optional<Duration> tryAcquire(String client) {
         Instant now = clock.instant();
-        var current = new ArrayList<Window>(limits.size());
-        Duration wait = Duration.ZERO;
-        for (int i = 0; i < limits.size(); i++) {
-            var limit = limits.get(i);
-            Window window = windows.get(i).asMap().compute(client,
-                    (key, existing) -> existing == null || !now.isBefore(existing.end) ? new Window(now.plus(limit.window())) : existing);
-            if (window.used >= limit.searches()) {
+        var current = new ArrayList<Window>(counters.size());
+        Duration wait = null;
+        for (var counter : counters) {
+            Window window = counter.windows().asMap().compute(client, (key, existing) -> existing == null
+                    || !now.isBefore(existing.end) ? new Window(now.plus(counter.limit().window())) : existing);
+            if (window.used >= counter.limit().searches()) {
                 Duration untilReset = Duration.between(now, window.end);
-                if (untilReset.compareTo(wait) > 0) wait = untilReset;
+                if (wait == null || untilReset.compareTo(wait) > 0) wait = untilReset;
             }
             current.add(window);
         }
-        if (!wait.isZero()) return Optional.of(wait);
+        if (wait != null) return Optional.of(wait);
         current.forEach(window -> window.used++);
         return Optional.empty();
     }

@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
@@ -64,13 +64,19 @@ class QueryExpanderTests {
     }
 
     @Test
-    void fallsBackToNoPostsWithoutCallingHaikuOnceTheBudgetIsSpentButStillServesCachedExpansions() {
-        var expander = new QueryExpander(api.client, timeout, new DailyBudget(1, Clock.systemUTC(), new SimpleMeterRegistry()),
+    void fallsBackToNoPostsWithoutCallingHaikuOnceTheBudgetIsSpentAndAsksAgainTheNextDay() {
+        var clock = new TestClock(Instant.parse("2026-10-29T12:00:00Z"));
+        var expander = new QueryExpander(api.client, timeout, new DailyBudget(1, clock, new SimpleMeterRegistry()),
                 new SimpleMeterRegistry());
         assertEquals(3, expand(expander, "hikes").size());
         assertEquals(List.of(), expand(expander, "trails"));
+        // Cached expansions don't need the budget.
         assertEquals(3, expand(expander, "hikes").size());
         assertEquals(1, api.requests.size());
+
+        clock.advance(Duration.ofDays(1));
+        assertEquals(3, expand(expander, "trails").size());
+        assertEquals(2, api.requests.size());
     }
 
     @Test

@@ -31,6 +31,7 @@ class DailyBudget {
 
     /** {@code clock}'s zone decides when a day starts. */
     DailyBudget(int calls, Clock clock, MeterRegistry registry) {
+        if (calls < 0) throw new IllegalArgumentException("The daily budget can't be negative: " + calls);
         this.calls = calls;
         this.clock = clock;
         Gauge.builder("skystream.search.haiku.budget.remaining", this, DailyBudget::remaining).register(registry);
@@ -39,7 +40,7 @@ class DailyBudget {
     /** Takes a call from today's budget, or returns false when it's spent. */
     synchronized boolean tryTake() {
         startDay();
-        if (used == calls) return false;
+        if (used >= calls) return false;
         if (++used == calls) {
             log.warn("Today's budget of {} Haiku calls is spent: searches go without expansion or answers until the day ends",
                     calls);

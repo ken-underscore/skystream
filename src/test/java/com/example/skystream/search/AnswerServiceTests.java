@@ -91,9 +91,12 @@ class AnswerServiceTests {
 
     @Test
     void failsWithoutCallingHaikuOnceTheBudgetIsSpentButStillServesCachedAnswers() {
-        var limited = new AnswerService(api.client, Duration.ofSeconds(5),
-                new DailyBudget(1, Clock.systemUTC(), new SimpleMeterRegistry()), new SimpleMeterRegistry());
-        limited.answer("washington state hikes", POSTS).blockLast(Duration.ofSeconds(10));
+        var budget = new DailyBudget(1, Clock.systemUTC(), new SimpleMeterRegistry());
+        var limited = new AnswerService(api.client, Duration.ofSeconds(5), budget, new SimpleMeterRegistry());
+        // Nothing is taken until the answer is wanted.
+        var answer = limited.answer("washington state hikes", POSTS);
+        assertEquals(1, budget.remaining());
+        answer.blockLast(Duration.ofSeconds(10));
         assertEquals(List.of("Hikers loved Sahale Arm [1]."),
                 limited.answer("washington state hikes", POSTS).collectList().block(Duration.ofSeconds(10)));
         assertThrows(DailyBudget.SpentException.class,

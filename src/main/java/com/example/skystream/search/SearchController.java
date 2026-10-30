@@ -1,6 +1,5 @@
 package com.example.skystream.search;
 
-import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -53,10 +52,11 @@ class SearchController {
     @GetMapping("/api/search")
     ResponseEntity<Flux<Result>> search(@RequestParam String q, ServerHttpRequest request) {
         String query = validated(q);
-        return limited(request)
-                .<ResponseEntity<Flux<Result>>>map(seconds -> ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                        .header(HttpHeaders.RETRY_AFTER, String.valueOf(seconds)).build())
-                .orElseGet(() -> ResponseEntity.ok(search.search(query).map(Result::of)));
+        var wait = acquire(request);
+        if (wait.isPresent()) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header(HttpHeaders.RETRY_AFTER, wait.get().toString()).build();
+        }
+        return ResponseEntity.ok(search.search(query).map(Result::of));
     }
 
     /**
@@ -68,7 +68,7 @@ class SearchController {
     @GetMapping(value = "/api/search/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     Flux<ServerSentEvent<Object>> searchAndAnswer(@RequestParam String q, ServerHttpRequest request) {
         String query = validated(q);
-        var wait = limited(request);
+        var wait = acquire(request);
         if (wait.isPresent()) return Flux.just(event("limited", new Limited(wait.get())));
         return search.search(query).collectList().flatMapMany(hits -> Flux.concat(
                 Mono.just(event("results", hits.stream().map(Result::of).toList())),
@@ -82,13 +82,9 @@ class SearchController {
                         })));
     }
 
-    /**
-     * Counts a search by the request's client, or returns the seconds, rounded up, until it may search again. The
-     * client is the address the request came from: behind a proxy, the one in its {@code X-Forwarded-For}.
-     */
-    private Optional<Long> limited(ServerHttpRequest request) {
-        String client = Optional.ofNullable(request.getRemoteAddress()).map(InetSocketAddress::getHostString).orElse("unknown");
-        return limiter.tryAcquire(client).map(wait -> Math.ceilDiv(wait.toMillis(), 1000));
+    /** Counts a search by the request's client, or returns the seconds, rounded up, until it may search again. */
+    private Optional<Long> acquire(ServerHttpRequest request) {
+        return limiter.tryAcquire(Clients.of(request)).map(wait -> Math.ceilDiv(wait.toMillis(), 1000));
     }
 
     private static String validated(String q) {

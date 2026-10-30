@@ -33,4 +33,10 @@ class DailyBudgetTests {
         assertTrue(budget.tryTake());
         assertEquals(1, budget.remaining());
     }
+
+    @Test
+    void anEmptyBudgetRefusesEveryCallAndANegativeOneIsRejected() {
+        assertFalse(new DailyBudget(0, Clock.systemUTC(), new SimpleMeterRegistry()).tryTake());
+        assertThrows(IllegalArgumentException.class, () -> new DailyBudget(-1, Clock.systemUTC(), new SimpleMeterRegistry()));
+    }
 }

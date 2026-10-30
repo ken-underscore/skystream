@@ -22,6 +22,7 @@ class RateLimiterTests {
         assertEquals(Optional.of(Duration.ofSeconds(40)), limiter.tryAcquire("a"));
         assertEquals(Optional.empty(), limiter.tryAcquire("b"));
 
+        // A window ends exactly a minute after it starts.
         clock.advance(Duration.ofSeconds(40));
         assertEquals(Optional.empty(), limiter.tryAcquire("a"));
     }

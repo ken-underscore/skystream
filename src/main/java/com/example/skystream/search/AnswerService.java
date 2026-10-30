@@ -54,18 +54,19 @@ class AnswerService {
     Flux<String> answer(String query, List<SearchPost> posts) {
         if (posts.isEmpty()) return Flux.empty();
         var key = new Key(QueryExpander.normalize(query), posts.stream().map(SearchPost::uri).toList());
-        String cached = cache.getIfPresent(key);
-        if (cached != null) return Flux.just(cached);
-        if (!budget.tryTake()) return Flux.error(new DailyBudget.SpentException());
-        // Only Haiku's answers are timed, not cached ones.
-        return Timing.timed(Flux.defer(() -> {
+        // On subscription, so an answer no one waits for takes nothing from the budget.
+        return Flux.defer(() -> {
+            String cached = cache.getIfPresent(key);
+            if (cached != null) return Flux.just(cached);
+            if (!budget.tryTake()) return Flux.error(new DailyBudget.SpentException());
             var answer = new StringBuilder();
-            return stream(params(query, posts)).timeout(timeout)
+            // Only Haiku's answers are timed, not cached ones.
+            return Timing.timed(stream(params(query, posts)).timeout(timeout)
                     .doOnNext(answer::append)
                     .doOnComplete(() -> {
                         if (!answer.isEmpty()) cache.put(key, answer.toString());
-                    });
-        }), registry, "skystream.search.answer");
+                    }), registry, "skystream.search.answer");
+        });
     }
 
     private static MessageCreateParams params(String query, List<SearchPost> posts) {
