@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploys Skystream on the server. It checks out a commit, builds the app and the frontend, and restarts the app. Once
-# the app is healthy, it switches the served frontend to the new build.
+# the app is healthy, it switches the served frontend to the new build and applies the commit's Caddyfile.
 # Run as root: /opt/skystream/app/deploy/deploy.sh [ref]. The ref defaults to main; a branch name means the remote's.
 # Rolling back is deploying an earlier commit, as far back as the first whose deploy.sh re-runs itself after checking
 # out (--checked-out below). First-time setup is in the README's Deploying section.
@@ -23,6 +23,9 @@ fi
 
 commit=$(git rev-parse --short HEAD)
 echo "Deploying $(git log -1 --format='%h %s')"
+
+# Checked first, so a bad Caddyfile fails the deploy in seconds rather than Caddy's next start.
+if ! errors=$(caddy validate --config deploy/Caddyfile 2>&1); then echo "$errors" >&2; exit 1; fi
 
 # Branch protection requires CI's tests to pass before anything merges to main.
 ./mvnw --quiet -DskipTests clean package
@@ -57,16 +60,16 @@ healthy() {
 # Startup loads the model and checks the schema; ingestion resumes from the saved checkpoint. About 2 minutes.
 for _ in $(seq 60); do
   if healthy; then
-    # Switching a link is atomic, so the new frontend replaces the old one with no gap. The previous build is kept, for
-    # pages loaded from it that still fetch its files.
-    previous=$(readlink /opt/skystream/www || true)
+    # Switching a link is atomic, so the new frontend replaces the old one with no gap.
     ln -sfn "$www" /opt/skystream/www.new
     mv -T /opt/skystream/www.new /opt/skystream/www
-    find /opt/skystream -maxdepth 1 -name 'www-*' ! -path "$www" ! -path "${previous:-$www}" -exec rm -rf {} +
+    find /opt/skystream -maxdepth 1 -name 'www-*' ! -path "$www" -exec rm -rf {} +
+    install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
+    systemctl reload-or-restart caddy
     echo "Up: $commit"
     exit 0
   fi
   sleep 2
 done
-echo "$commit isn't healthy after 60 checks, so the previous frontend is still served; see journalctl -u skystream" >&2
+echo "$commit isn't healthy after 60 checks, so the previous frontend and Caddyfile are still served; see journalctl -u skystream" >&2
 exit 1
