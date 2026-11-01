@@ -137,6 +137,8 @@
 	</dependencies>
 
 	<build>
+		<!-- A fixed name, so deploy/deploy.sh needn't know the version. -->
+		<finalName>${project.artifactId}</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>

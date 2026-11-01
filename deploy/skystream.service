@@ -1,0 +1,35 @@
+# Runs Skystream on the server. deploy/deploy.sh installs it as /etc/systemd/system/skystream.service.
+[Unit]
+Description=Skystream
+# Postgres runs in Docker. If it isn't accepting connections yet, the app fails to start and is restarted.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+# The code, model and settings are root's, so the app can't change what it runs, or what deploy.sh runs as root.
+User=skystream
+EnvironmentFile=/opt/skystream/app/.env
+# The app's home, and the only place it writes: crash logs, and DJL's native tokenizer library.
+StateDirectory=skystream
+WorkingDirectory=/var/lib/skystream
+Environment=DJL_CACHE_DIR=/var/lib/skystream/djl
+ExecStart=/usr/bin/java -XX:+ExitOnOutOfMemoryError -XX:ErrorFile=/var/lib/skystream/hs_err_pid%%p.log \
+    -jar /opt/skystream/skystream.jar --spring.profiles.active=production
+# Restarts after a crash or running out of memory, but not after systemctl stop.
+Restart=on-failure
+RestartSec=5
+# The JVM exits with 143 when stopped by SIGTERM.
+SuccessExitStatus=143
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
