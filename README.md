@@ -217,32 +217,44 @@ Set `skystream.jetstream.enabled=false` to run HTTP/database functionality witho
 On the server, the app runs as a packaged jar under systemd, and Postgres runs in Docker Compose:
 - **The app:** `deploy/skystream.service` runs it as the `skystream` user with the `production` profile (`src/main/resources/application-production.properties`). It listens only on 127.0.0.1, and restarts after a crash.
 - **Postgres:** `deploy/compose.production.yaml` gives it a fixed local port, a health check and a restart policy, so it comes back after a reboot.
-- **The frontend:** built into `/opt/skystream/www`, for a web server on the same machine to serve, passing `/api/` to the app. That web server, and HTTPS, aren't set up by these steps yet, so the site isn't public until they are.
+- **The frontend:** built into `/opt/skystream/www`.
+- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile.
+- **The firewall:** `ufw` allows only SSH, HTTP and HTTPS. Docker bypasses `ufw` for ports it publishes, which is why Compose binds Postgres to 127.0.0.1.
 - **Ownership:** the checkout (`/opt/skystream/app`), the model, `.env`, the installed jar (`/opt/skystream/skystream.jar`) and the frontend all belong to root. The app writes only to `/var/lib/skystream`, so it can't change the code that runs, or the deploy script root runs.
 
 **First-time setup**, on Ubuntu 24.04 as root:
 
-1. Install Java 21, Git, Node 22 with pnpm, and Docker Engine with its Compose plugin ([Docker's instructions](https://docs.docker.com/engine/install/ubuntu/)):
+1. Point the domain's DNS at the server: an `A` record, and an `AAAA` record if the server has IPv6. Caddy needs it to get the certificate.
+
+2. Install Java 21, Git, Node 22 with pnpm, Caddy ([Caddy's instructions](https://caddyserver.com/docs/install#debian-ubuntu-raspbian)), and Docker Engine with its Compose plugin ([Docker's instructions](https://docs.docker.com/engine/install/ubuntu/)):
 
    ```sh
    apt update && apt install -y openjdk-21-jdk-headless git curl
    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt install -y nodejs && npm install -g pnpm@11
    ```
 
-2. Create the user and clone the repository:
+3. Turn on the firewall:
+
+   ```sh
+   apt install -y ufw
+   ufw allow OpenSSH && ufw allow 80,443/tcp && ufw allow 443/udp
+   ufw --force enable
+   ```
+
+4. Create the user and clone the repository:
 
    ```sh
    useradd --system --home-dir /var/lib/skystream --no-create-home --shell /usr/sbin/nologin skystream
    git clone https://github.com/ken-underscore/skystream.git /opt/skystream/app
    ```
 
-3. Create `/opt/skystream/app/.env`, readable only by root (`chmod 600`):
+5. Create `/opt/skystream/app/.env`, readable only by root (`chmod 600`):
    - **Required:** `ANTHROPIC_API_KEY`.
    - **Required:** `COMPOSE_FILE=compose.yaml:deploy/compose.production.yaml`, so `docker compose` commands run by hand in the checkout, such as starting monitoring, include the server's additions. `deploy.sh` sets it itself.
    - **Optional:** `SKYSTREAM_SEARCH_THREADS`, the embedding threads, which default to 2. Use about half the cores, such as `4` on 8.
    - **For metrics:** the three `GRAFANA_CLOUD_*` settings (see Metrics).
 
-4. Deploy, then start monitoring if wanted:
+6. Deploy, then start monitoring if wanted:
 
    ```sh
    /opt/skystream/app/deploy/deploy.sh
@@ -259,7 +271,7 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 1. checks out the latest `main`;
 2. builds the jar and the frontend, and fetches the model if it changed;
 3. installs the jar and the service file, then restarts the app;
-4. once the app's own process answers its health check, switches the served frontend to the new build, keeping the previous one for pages already loaded from it. If the app isn't healthy within about 2 minutes, it says so, and the previous frontend stays.
+4. once the app's own process answers its health check, switches the served frontend to the new build, keeping the previous one for pages already loaded from it, and applies the Caddyfile, which it checked before restarting anything. If the app isn't healthy within about 2 minutes, it says so, and the previous frontend stays.
 
 The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost. Only one deploy runs at a time.
 

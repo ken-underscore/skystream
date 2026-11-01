@@ -1,0 +1,23 @@
+# The server's web server config, installed by deploy.sh. Caddy serves the frontend and passes /api/ to the app, with a
+# certificate it gets and renews itself. It redirects HTTP to HTTPS.
+skystream.kenfritschy.dev {
+	encode
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080 {
+			# The app takes the client's address from the last X-Forwarded-For entry, which Caddy sets. Caddy would pass a
+			# client's Forwarded header on unchanged; the app ignores it, and this keeps it from reaching the app at all.
+			header_up -Forwarded
+		}
+	}
+
+	handle {
+		root * /opt/skystream/www
+		# Built assets have a hash in their names, so they never change. Pages are revalidated, so a deploy shows at once.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /assets/*
+		header @pages Cache-Control no-cache
+		file_server
+	}
+}

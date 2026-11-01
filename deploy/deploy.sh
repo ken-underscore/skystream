@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploys Skystream on the server. It checks out a commit, builds the app and the frontend, and restarts the app. Once
-# the app is healthy, it switches the served frontend to the new build.
+# the app is healthy, it switches the served frontend to the new build and applies the commit's Caddyfile.
 # Run as root: /opt/skystream/app/deploy/deploy.sh [ref]. The ref defaults to main; a branch name means the remote's.
 # Rolling back is deploying an earlier commit, as far back as the first whose deploy.sh re-runs itself after checking
 # out (--checked-out below). First-time setup is in the README's Deploying section.
@@ -34,6 +34,9 @@ scripts/fetch-model.sh >/dev/null
 www=/opt/skystream/www-$commit-$(date +%s)
 (cd src/main/frontend && pnpm install --frozen-lockfile --silent && pnpm --silent build --outDir "$www" --emptyOutDir)
 
+# Checked now, before anything changes, so a bad Caddyfile fails the deploy rather than Caddy's next start.
+if ! errors=$(caddy validate --config deploy/Caddyfile 2>&1); then echo "$errors" >&2; exit 1; fi
+
 # Postgres starts on its own after a reboot; this starts it the first time, and applies Compose changes.
 docker compose up --detach --wait postgres-db
 
@@ -63,6 +66,8 @@ for _ in $(seq 60); do
     ln -sfn "$www" /opt/skystream/www.new
     mv -T /opt/skystream/www.new /opt/skystream/www
     find /opt/skystream -maxdepth 1 -name 'www-*' ! -path "$www" ! -path "${previous:-$www}" -exec rm -rf {} +
+    install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
+    systemctl reload caddy
     echo "Up: $commit"
     exit 0
   fi
