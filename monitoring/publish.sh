@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Creates or updates the Skystream dashboard and the alerts for when the app's metrics stop arriving or ingestion falls
-# behind.
+# Creates or updates the Skystream dashboard and the alerts for when the app's metrics stop arriving, ingestion falls
+# behind, or the day's Haiku budget is spent.
 # Needs curl 7.76+, jq, and in the environment:
 #   GRAFANA_URL                    the stack's Grafana, e.g. https://your-stack.grafana.net
 #   GRAFANA_SERVICE_ACCOUNT_TOKEN  a token of a service account with the Admin role

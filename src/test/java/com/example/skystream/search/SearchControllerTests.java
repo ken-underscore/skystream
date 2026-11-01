@@ -78,21 +78,23 @@ class SearchControllerTests {
                 return Arrays.copyOf(new float[]{1, 0}, 768);
             }
         };
-        var expander = new QueryExpander(null, Duration.ZERO, new SimpleMeterRegistry()) {
+        var expander = new QueryExpander(null, Duration.ZERO, null, new SimpleMeterRegistry()) {
             @Override
             Mono<List<String>> expand(String query) {
                 return Mono.just(hypothetical);
             }
         };
-        var answers = new AnswerService(null, Duration.ZERO, new SimpleMeterRegistry()) {
+        var answers = new AnswerService(null, Duration.ZERO, null, new SimpleMeterRegistry()) {
             @Override
             Flux<String> answer(String query, List<SearchPost> posts) {
                 answered.add(posts);
                 return answer;
             }
         };
+        // Two searches a minute: enough for every test but the one about the limit.
+        var limiter = new RateLimiter(new TestClock(seenAt), List.of(new RateLimiter.Limit(2, Duration.ofMinutes(1))));
         client = WebTestClient.bindToController(
-                new SearchController(new SearchService(embedder, repository, expander, registry), answers)).build();
+                new SearchController(new SearchService(embedder, repository, expander, registry), answers, limiter)).build();
     }
 
     private static String uri(String rkey) {
@@ -190,6 +192,30 @@ class SearchControllerTests {
         answer = Flux.just("Hikers ").concatWith(Flux.error(new IllegalStateException("Haiku declined to answer")));
         assertEquals(List.of("results", "answer", "failed"),
                 stream("washington state hikes").stream().map(ServerSentEvent::event).toList());
+    }
+
+    @Test
+    void keepsTheResultsAndEndsWithPausedOnceTheBudgetIsSpent() {
+        captureEmbedded("first");
+        answer = Flux.error(new DailyBudget.SpentException());
+        assertEquals(List.of("results", "paused"), stream("washington state hikes").stream().map(ServerSentEvent::event).toList());
+    }
+
+    @Test
+    void refusesAClientThatSearchedTooOftenWithoutSearching() {
+        stream("hikes");
+        client.get().uri("/api/search?q={q}", "hikes").exchange().expectStatus().isOk();
+        assertEquals(List.of("hikes", "hikes"), queries);
+
+        client.get().uri("/api/search?q={q}", "hikes").exchange()
+                .expectStatus().isEqualTo(429)
+                .expectHeader().valueEquals("Retry-After", "60");
+        var events = stream("hikes");
+        assertEquals(List.of("limited"), events.stream().map(ServerSentEvent::event).toList());
+        assertEquals("{\"retryAfterSeconds\":60}", events.getFirst().data());
+        assertEquals(List.of("hikes", "hikes"), queries);
+        // A bad query is refused as such, even from a limited client.
+        client.get().uri("/api/search?q={q}", " ").exchange().expectStatus().isBadRequest();
     }
 
     @Test

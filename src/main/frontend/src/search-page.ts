@@ -1,5 +1,5 @@
 import './style.css';
-import { ago, citedParts, parseAnswerText, parseResults } from './results';
+import { ago, citedParts, parseAnswerText, parseResults, retryIn } from './results';
 import type { SearchResult } from './results';
 
 function element(id: string): HTMLElement {
@@ -69,6 +69,17 @@ function search(query: string) {
   });
   source.addEventListener('done', () => end());
   source.addEventListener('failed', () => end('Could not write an answer this time. The results above are unaffected.'));
+  source.addEventListener('paused', () => end('Answers are paused until midnight UTC: today’s limit is used up. '
+    + 'Until then, results may be less relevant.'));
+  source.addEventListener('limited', event => {
+    let wait = 'later';
+    try {
+      wait = retryIn(JSON.parse(event.data));
+    } catch {
+      // The message still says why, without the wait.
+    }
+    fail(`you’ve searched a lot in a short time. Try again ${wait}.`);
+  });
   // The browser hides why a stream failed, so the likeliest causes are named instead.
   source.addEventListener('error', () => found
     ? end('The answer stopped early.')

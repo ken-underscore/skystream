@@ -60,5 +60,36 @@
         }
       }
     ]
+  },
+  {
+    "uid": "skystream-haiku-budget-spent",
+    "title": "Skystream Haiku budget spent",
+    "folderUID": "skystream",
+    "ruleGroup": "skystream",
+    "condition": "C",
+    "for": "0s",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "annotations": {
+      "summary": "Today's Haiku budget is spent, so searches go without expansion or answers until midnight UTC: heavy use, or abuse the rate limit didn't stop."
+    },
+    "data": [
+      {
+        "refId": "A",
+        "datasourceUid": "DATASOURCE_UID",
+        "relativeTimeRange": {"from": 300, "to": 0},
+        "model": {"refId": "A", "expr": "min(skystream_search_haiku_budget_remaining{host=\"ALERT_HOST\"})", "instant": true}
+      },
+      {
+        "refId": "C",
+        "datasourceUid": "__expr__",
+        "model": {
+          "refId": "C",
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [{"evaluator": {"type": "lt", "params": [1]}}]
+        }
+      }
+    ]
   }
 ]
