@@ -14,7 +14,11 @@ skystream.kenfritschy.dev {
 	handle {
 		root * /opt/skystream/www
 		# Built assets have a hash in their names, so they never change. Pages are revalidated, so a deploy shows at once.
-		@assets path /assets/*
+		# A missing asset gets neither, so its 404 isn't cached.
+		@assets {
+			path /assets/*
+			file
+		}
 		header @assets Cache-Control "public, max-age=31536000, immutable"
 		@pages not path /assets/*
 		header @pages Cache-Control no-cache

@@ -218,7 +218,7 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 - **The app:** `deploy/skystream.service` runs it as the `skystream` user with the `production` profile (`src/main/resources/application-production.properties`). It listens only on 127.0.0.1, and restarts after a crash.
 - **Postgres:** `deploy/compose.production.yaml` gives it a fixed local port, a health check and a restart policy, so it comes back after a reboot.
 - **The frontend:** built into `/opt/skystream/www`.
-- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile.
+- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile in your own fork: `deploy.sh` checks out commits, so a local edit on the server won't last.
 - **The firewall:** `ufw` allows only SSH, HTTP and HTTPS. Docker bypasses `ufw` for ports it publishes, which is why Compose binds Postgres to 127.0.0.1.
 - **Ownership:** the checkout (`/opt/skystream/app`), the model, `.env`, the installed jar (`/opt/skystream/skystream.jar`) and the frontend all belong to root. The app writes only to `/var/lib/skystream`, so it can't change the code that runs, or the deploy script root runs.
 
@@ -271,11 +271,11 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 1. checks out the latest `main`;
 2. builds the jar and the frontend, and fetches the model if it changed;
 3. installs the jar and the service file, then restarts the app;
-4. once the app's own process answers its health check, switches the served frontend to the new build, keeping the previous one for pages already loaded from it, and applies the Caddyfile, which it checked before restarting anything. If the app isn't healthy within about 2 minutes, it says so, and the previous frontend stays.
+4. once the app's own process answers its health check, switches the served frontend to the new build and applies the Caddyfile, which it checked before building. If the app isn't healthy within about 2 minutes, it says so, and the previous frontend and Caddyfile stay.
 
 The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost. Only one deploy runs at a time.
 
-**Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the first whose `deploy.sh` re-runs itself after checking out (`--checked-out`). Older ones can't deploy, and can't run in production.
+**Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the first whose `deploy.sh` re-runs itself after checking out (`--checked-out`). Older ones can't deploy, and can't run in production. Going back past `bd033dc` also removes the search rate limits and daily budget, which a public site needs.
 
 **Logs:** `journalctl -u skystream -f`. A JVM crash leaves `hs_err_pid*.log` in `/var/lib/skystream`.
 

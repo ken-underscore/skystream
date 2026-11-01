@@ -24,6 +24,9 @@ fi
 commit=$(git rev-parse --short HEAD)
 echo "Deploying $(git log -1 --format='%h %s')"
 
+# Checked first, so a bad Caddyfile fails the deploy in seconds rather than Caddy's next start.
+if ! errors=$(caddy validate --config deploy/Caddyfile 2>&1); then echo "$errors" >&2; exit 1; fi
+
 # Branch protection requires CI's tests to pass before anything merges to main.
 ./mvnw --quiet -DskipTests clean package
 # Only fetches what's missing or changed, so the model matches the commit, rollbacks included. A changed model replaces
@@ -33,9 +36,6 @@ scripts/fetch-model.sh >/dev/null
 # redeploying the commit that's live.
 www=/opt/skystream/www-$commit-$(date +%s)
 (cd src/main/frontend && pnpm install --frozen-lockfile --silent && pnpm --silent build --outDir "$www" --emptyOutDir)
-
-# Checked now, before anything changes, so a bad Caddyfile fails the deploy rather than Caddy's next start.
-if ! errors=$(caddy validate --config deploy/Caddyfile 2>&1); then echo "$errors" >&2; exit 1; fi
 
 # Postgres starts on its own after a reboot; this starts it the first time, and applies Compose changes.
 docker compose up --detach --wait postgres-db
@@ -60,18 +60,16 @@ healthy() {
 # Startup loads the model and checks the schema; ingestion resumes from the saved checkpoint. About 2 minutes.
 for _ in $(seq 60); do
   if healthy; then
-    # Switching a link is atomic, so the new frontend replaces the old one with no gap. The previous build is kept, for
-    # pages loaded from it that still fetch its files.
-    previous=$(readlink /opt/skystream/www || true)
+    # Switching a link is atomic, so the new frontend replaces the old one with no gap.
     ln -sfn "$www" /opt/skystream/www.new
     mv -T /opt/skystream/www.new /opt/skystream/www
-    find /opt/skystream -maxdepth 1 -name 'www-*' ! -path "$www" ! -path "${previous:-$www}" -exec rm -rf {} +
+    find /opt/skystream -maxdepth 1 -name 'www-*' ! -path "$www" -exec rm -rf {} +
     install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
-    systemctl reload caddy
+    systemctl reload-or-restart caddy
     echo "Up: $commit"
     exit 0
   fi
   sleep 2
 done
-echo "$commit isn't healthy after 60 checks, so the previous frontend is still served; see journalctl -u skystream" >&2
+echo "$commit isn't healthy after 60 checks, so the previous frontend and Caddyfile are still served; see journalctl -u skystream" >&2
 exit 1
