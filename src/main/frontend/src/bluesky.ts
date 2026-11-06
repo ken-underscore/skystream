@@ -6,11 +6,12 @@ const api = 'https://public.api.bsky.app/xrpc/app.bsky.feed.getPosts';
 // Only Bluesky's own image host is used, so the API can't point the page at another site.
 const cdn = 'https://cdn.bsky.app/';
 // Images on posts or accounts labelled with these stay hidden, as Bluesky hides them by default.
-const adult = new Set(['porn', 'sexual', 'nudity', 'graphic-media']);
+const hiding = new Set(['!hide', 'porn', 'sexual', 'nudity', 'graphic-media']);
 
 const fields = (value: unknown) => (value ?? {}) as Record<string, unknown>;
 const fromCdn = (value: unknown) => typeof value === 'string' && value.startsWith(cdn) ? value : undefined;
-const labelled = (labels: unknown) => Array.isArray(labels) && labels.some(label => adult.has(String(fields(label).val)));
+const labelled = (labels: unknown) =>
+  Array.isArray(labels) && labels.some(label => hiding.has(String(fields(label).val)));
 
 /** The AT URI that Bluesky's API names a post by, from its bsky.app link. */
 export function atUri(url: string): string | undefined {

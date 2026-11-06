@@ -14,6 +14,7 @@ const error = byId('error');
 const results = byId('results');
 const answer = byId('answer');
 const answerText = byId('answer-text');
+const similarityMeaning = byId('similarity-meaning').textContent;
 // The form submits as a plain GET, so each search is its own page in history and can be shared as a link.
 const input = byId('q') as HTMLInputElement;
 const query = new URLSearchParams(location.search).get('q')?.trim() ?? '';
@@ -52,7 +53,7 @@ function search(query: string) {
     }
     const cards = found.map(card);
     results.replaceChildren(...cards.map(({ item }) => item));
-    fill(cards, found.map(({ url }) => atUri(url)));
+    fill(cards);
     status.textContent = found.length === 1 ? `The post closest in meaning to “${query}”.`
       : found.length ? `The ${found.length} posts closest in meaning to “${query}”, best match first.`
       : 'No posts are searchable yet. Captured posts become searchable once they’re embedded, usually within seconds.';
@@ -90,18 +91,24 @@ function search(query: string) {
 }
 
 /** Fills the cards from Bluesky. If Bluesky can't be reached, they keep the stored text. */
-async function fill(cards: ReturnType<typeof card>[], uris: (string | undefined)[]) {
+async function fill(cards: ReturnType<typeof card>[]) {
+  const uris = cards.flatMap(({ uri }) => uri ? [uri] : []);
+  if (!uris.length) return;
   let posts: Map<string, Post>;
   try {
-    posts = await fetchPosts(uris.filter(uri => uri !== undefined));
+    posts = await fetchPosts(uris);
   } catch {
     return;
   }
-  cards.forEach((card, i) => {
-    const uri = uris[i];
-    if (uri) card.fill(posts.get(uri));
-  });
+  for (const { uri, fill } of cards) if (uri) fill(posts.get(uri));
 }
+
+// Escape hides an open similarity tip until the pointer or focus leaves its score.
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    document.querySelectorAll('.similarity:is(:hover, :focus)').forEach(open => open.classList.add('dismissed'));
+  }
+});
 
 function citation(result: number): HTMLAnchorElement {
   const link = element('a', 'cite', String(result));
@@ -117,9 +124,6 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', 
   return created;
 }
 
-const similarityMeaning = 'How close this post’s meaning is to your search, from 0 to 1: higher is closer. It’s most '
-  + 'useful for comparing results. If even the top ones are low, nothing matched closely.';
-
 /**
  * A result as a post card, showing the stored text at once. Filling it from Bluesky adds the author, likes and images,
  * or says the post is gone.
@@ -133,12 +137,15 @@ function card(result: SearchResult, index: number) {
   const names = element('span', 'names', element('span', '', time));
   const who = element('div', 'who', avatar, names);
   const text = element('p', 'text', result.text);
-  const meaning = element('span', '', similarityMeaning);
-  meaning.id = `similarity-${number}`;
-  meaning.setAttribute('role', 'tooltip');
-  const similarity = element('span', 'similarity', result.similarity.toFixed(2), meaning);
+  // The tip shows on hover or focus. Screen readers hear the same words once, from the page's shared description.
+  const tip = element('span', 'tip', similarityMeaning);
+  tip.setAttribute('aria-hidden', 'true');
+  const similarity = element('span', 'similarity', result.similarity.toFixed(2), tip);
   similarity.tabIndex = 0;
-  similarity.setAttribute('aria-describedby', meaning.id);
+  similarity.setAttribute('aria-describedby', 'similarity-meaning');
+  const undismiss = () => similarity.classList.remove('dismissed');
+  similarity.addEventListener('pointerleave', undismiss);
+  similarity.addEventListener('blur', undismiss);
   const link = element('a', '', 'Open on Bluesky ↗');
   link.href = result.url;
   link.target = '_blank';
@@ -149,6 +156,7 @@ function card(result: SearchResult, index: number) {
   item.id = `result-${number}`;
   return {
     item,
+    uri: atUri(result.url),
     fill(post: Post | undefined) {
       if (!post) {
         who.remove();

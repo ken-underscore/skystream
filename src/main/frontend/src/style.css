@@ -48,13 +48,11 @@ h1 select { font: inherit; color: inherit; background: none; border: 0; border-b
 .colhead { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--ink); }
 .colhead span:last-child { text-align: right; }
 .chart { position: relative; height: calc(var(--rows, 0) * var(--row-h)); list-style: none; margin: 0; padding: 0; }
-.chart li { position: absolute; inset: 0 0 auto; height: var(--row-h); border-bottom: 1px solid var(--line); transform: translateY(calc(var(--rank) * var(--row-h))); transition: transform .65s cubic-bezier(.65, 0, .35, 1), opacity .4s; }
-@starting-style { .chart li { opacity: 0; } }
-.chart li.leaving { opacity: 0; }
+.chart li { position: absolute; inset: 0 0 auto; height: var(--row-h); border-bottom: 1px solid var(--line); transform: translateY(calc(var(--rank) * var(--row-h))); }
 .chart a { height: 100%; text-decoration: none; }
 .chart .rank { font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: right; }
 .chart .word { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chart .bar { height: 3px; width: calc(var(--share) * 100%); background: var(--ink); transition: width .65s cubic-bezier(.65, 0, .35, 1); }
+.chart .bar { height: 3px; width: calc(var(--share) * 100%); background: var(--ink); }
 .chart .count { font-family: var(--mono); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
 .chart a:hover .word { color: var(--accent); }
 .chart a:hover .bar, .chart a:focus-visible .bar { background: var(--accent); }
@@ -90,8 +88,10 @@ footer { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line);
 .post .foot a { text-decoration: none; }
 .post .foot a:hover { color: var(--accent); }
 .similarity { position: relative; cursor: help; font-family: var(--mono); font-size: 12.5px; text-decoration: underline dotted; text-underline-offset: 3px; }
-.similarity [role='tooltip'] { position: absolute; left: 0; bottom: calc(100% + 8px); width: 270px; max-width: 70vw; background: var(--ink); color: var(--bg); font-family: var(--sans); font-size: 12.5px; line-height: 1.45; padding: 9px 11px; border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 1; }
-.similarity:hover [role='tooltip'], .similarity:focus [role='tooltip'] { opacity: 1; }
+.similarity .tip { position: absolute; left: 0; bottom: calc(100% + 8px); width: 270px; max-width: 70vw; background: var(--ink); color: var(--bg); font-family: var(--sans); font-size: 12.5px; line-height: 1.45; padding: 9px 11px; border-radius: 6px; visibility: hidden; opacity: 0; transition: opacity .15s, visibility .15s; z-index: 1; }
+/* Bridges the gap, so the pointer can move from the score onto the tip. */
+.similarity .tip::after { content: ''; position: absolute; inset: 100% 0 -8px; }
+.similarity:is(:hover, :focus):not(.dismissed) .tip { visibility: visible; opacity: 1; }
 
 @media (max-width: 600px) {
   :root { --rank-w: 1.5rem; --word-w: 6.4rem; --gap: 10px; }
