@@ -1,9 +1,9 @@
 export const refreshIntervals = [
-  { milliseconds: 0, label: 'Every batch' },
-  { milliseconds: 5_000, label: '5 seconds' },
-  { milliseconds: 10_000, label: '10 seconds' },
-  { milliseconds: 30_000, label: '30 seconds' },
-  { milliseconds: 60_000, label: '60 seconds' },
+  { milliseconds: 0, label: 'every batch' },
+  { milliseconds: 5_000, label: 'every 5 seconds' },
+  { milliseconds: 10_000, label: 'every 10 seconds' },
+  { milliseconds: 30_000, label: 'every 30 seconds' },
+  { milliseconds: 60_000, label: 'every minute' },
 ];
 const storageKey = 'skystream.refreshIntervalMs';
 

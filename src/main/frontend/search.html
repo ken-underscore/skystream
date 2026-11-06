@@ -2,20 +2,22 @@
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Search · Skystream</title></head>
 <body><main>
-  <header><div><p class="eyebrow">BLUESKY / LAST 24 HOURS</p><h1>Search posts</h1></div><nav><a href="./">Word cloud</a></nav></header>
-  <form class="search" role="search">
-    <label for="q">Find English posts from the last 24 hours by meaning, not just matching words.</label>
-    <input id="q" name="q" type="search" required pattern=".*\S.*" maxlength="200" autocomplete="off" placeholder="remedies for a sore throat">
-    <button>Search</button>
-  </form>
-  <p id="result-status" role="status"></p>
-  <p id="error" role="alert" hidden></p>
-  <ol id="results" class="results"></ol>
-  <p id="similarity-note" class="note" hidden>Similarity is how close a post’s meaning is to your search: higher is closer. Compare it across the results. If even the top scores are low, nothing matched closely.</p>
-  <section id="answer" class="answer" aria-labelledby="answer-title" hidden>
-    <h2 id="answer-title">Answer</h2>
+  <header class="top"><a class="brand" href="./">Skystream</a><nav><a href="./">Words</a><a href="search.html" aria-current="page">Search</a></nav></header>
+  <div class="intro">
+    <p class="eyebrow">Search · last 24 hours</p>
+    <h1>Search posts by meaning</h1>
+    <form class="search" role="search">
+      <input id="q" name="q" type="search" required pattern=".*\S.*" maxlength="200" autocomplete="off" placeholder="Try semantic search against recent bluesky posts" aria-label="Search posts by meaning">
+      <button>Search</button>
+    </form>
+    <p id="error" role="alert" hidden></p>
+  </div>
+  <section id="answer" class="summary" aria-labelledby="answer-title" hidden>
+    <h2 id="answer-title">Generated summary</h2>
     <p id="answer-text" aria-live="polite"></p>
-    <p class="note">Written by Claude from the posts above, which are strangers’ words: check them before relying on it.</p>
   </section>
+  <p id="result-status" role="status"></p>
+  <ol id="results" class="results" role="list"></ol>
+  <p id="similarity-meaning" hidden>How close this post’s meaning is to your search, from 0 to 1: higher is closer. It’s most useful for comparing results. If even the top ones are low, nothing matched closely.</p>
 </main><script type="module" src="/src/search-page.ts"></script></body>
 </html>
