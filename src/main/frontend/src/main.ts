@@ -1,9 +1,11 @@
 import './style.css';
-import { createCloud } from './cloud';
-import type { CloudTransition } from './cloud';
+import { createChart } from './chart';
 import { connectStream } from './stream';
 import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
 import { duration, loadSnapshotWindow, parseSnapshot, saveSnapshotWindow, snapshotWindows } from './snapshot';
+
+/** How many of the snapshot's most used words the chart shows. */
+const shown = 50;
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -11,66 +13,50 @@ function element(id: string): HTMLElement {
   return found;
 }
 const demo = new URLSearchParams(location.search).get('demo') === '1';
+const chart = element('chart') as HTMLOListElement;
 const empty = element('empty');
 const error = element('error');
 const collected = element('collected');
+const status = element('status');
 const mode = element('mode') as HTMLAnchorElement;
 mode.href = demo ? location.pathname : '?demo=1';
-mode.textContent = demo ? 'Connect live' : 'Try demo';
-const renderer = createCloud(element('cloud'), (placed, selected) => {
-  empty.hidden = placed > 0;
-  empty.textContent = selected ? 'No words fit this view.' : 'No words in this bucket.';
-  element('summary').textContent = `Showing ${placed} of ${selected} selected words.`;
-});
-const transitionDescriptions: Record<CloudTransition, string> = {
-  crossfade: 'The old cloud fades out while the new cloud fades in.',
-  move: 'Existing words move and resize; arriving and departing words fade.',
-  fade: 'The old cloud fades away before the new cloud appears.',
-  none: 'Each new cloud appears immediately.',
-};
-const transition = element('transition') as HTMLSelectElement;
-transition.addEventListener('change', () => {
-  const mode = transition.value as CloudTransition;
-  element('transition-description').textContent = transitionDescriptions[mode];
-  renderer.setTransition(mode);
-});
+mode.textContent = demo ? 'Live' : 'Demo';
+const update = createChart(chart);
+
+// The window reads as the end of the heading, as in "in the last hour", not "in the last 1 hour".
+const inHeading = (label: string) => label.replace(/^1 /, '');
+const snapshot = element('snapshot') as HTMLSelectElement;
+snapshot.replaceChildren(...snapshotWindows.map(window => new Option(inHeading(window.label), String(window.seconds))));
+snapshot.value = String(loadSnapshotWindow());
 const refresh = element('refresh') as HTMLSelectElement;
 refresh.replaceChildren(...refreshIntervals.map(interval => new Option(interval.label, String(interval.milliseconds))));
 refresh.value = String(loadRefreshInterval());
-const snapshot = element('snapshot') as HTMLSelectElement;
-snapshot.replaceChildren(...snapshotWindows.map(window => new Option(window.label, String(window.seconds))));
-snapshot.value = String(loadSnapshotWindow());
-refresh.addEventListener('change', () => {
-  saveRefreshInterval(Number(refresh.value));
-  restartStream();
-});
+
 function startStream() {
-  const windowLabel = snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds';
-  // "the last hour", not "the last 1 hour".
-  const lastWindow = `the last ${windowLabel.replace(/^1 /, '')}`;
+  const lastWindow = `the last ${snapshot.selectedOptions.item(0)?.textContent ?? '30 seconds'}`;
   const windowSeconds = Number(snapshot.value);
+  chart.setAttribute('aria-label', `The ${shown} words used most in ${lastWindow}, with how often each was used`);
   return connectStream(demo, windowSeconds, Number(refresh.value), json => {
     try {
       const { words, collectedSeconds } = parseSnapshot(json);
-      renderer.update(words);
+      update(words.slice(0, shown));
+      empty.hidden = words.length > 0;
+      empty.textContent = 'No words in this window yet.';
       // The app holds only what it has collected since it began, minus any time it was down.
       collected.hidden = collectedSeconds >= windowSeconds;
       collected.textContent = collectedSeconds
         ? `Only ${duration(collectedSeconds)} of ${lastWindow} has been collected so far.`
         : `Nothing from ${lastWindow} has been collected yet.`;
-      element('updated').textContent = `Received at ${new Date().toLocaleTimeString()}`;
-      // The cloud's title carries the note too, for screen readers.
-      element('title').textContent = (words.length
-        ? `Latest snapshot (${windowLabel}): ${words.length} unique words. Larger words occurred more often.`
-        : `Latest snapshot (${windowLabel}) contains no words.`) + (collected.hidden ? '' : ` ${collected.textContent}`);
+      element('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
       error.hidden = true;
     } catch (cause) {
-      error.textContent = `Could not read bucket: ${cause instanceof Error ? cause.message : 'Invalid data'}`;
+      error.textContent = `Could not read the latest words: ${cause instanceof Error ? cause.message : 'invalid data'}`;
       error.hidden = false;
     }
   }, value => {
-    element('status').textContent = value;
-    element('status').dataset.connected = String(value === 'Connected' || value === 'Demo mode');
+    const live = value === 'Connected' || value === 'Demo mode';
+    status.textContent = value === 'Connected' ? 'Live' : value;
+    status.dataset.live = String(live);
   });
 }
 let disconnect = startStream();
@@ -83,7 +69,10 @@ snapshot.addEventListener('change', () => {
   saveSnapshotWindow(Number(snapshot.value));
   restartStream();
 });
-function cleanup() { disconnect(); renderer.destroy(); }
-window.addEventListener('pagehide', cleanup, { once: true });
+refresh.addEventListener('change', () => {
+  saveRefreshInterval(Number(refresh.value));
+  restartStream();
+});
+window.addEventListener('pagehide', () => disconnect(), { once: true });
 window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
-if (import.meta.hot) import.meta.hot.dispose(cleanup);
+if (import.meta.hot) import.meta.hot.dispose(() => disconnect());
