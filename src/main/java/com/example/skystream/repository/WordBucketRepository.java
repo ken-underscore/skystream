@@ -84,7 +84,7 @@ public class WordBucketRepository {
     /** Every snapshot duration, in seconds, shortest first. */
     public static final List<Integer> SNAPSHOT_WINDOW_SECONDS =
             Arrays.stream(Tier.values()).flatMap(tier -> tier.windowSeconds().stream()).toList();
-    /** Words kept per window: the browser shows this many. */
+    /** Words kept per window: the browser shows this many, so keep it in step with {@code shown} in the frontend's main.ts. */
     public static final int TOP_WORDS = 50;
 
     private final DatabaseClient database;

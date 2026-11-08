@@ -4,7 +4,7 @@ import { connectStream } from './stream';
 import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
 import { duration, loadSnapshotWindow, parseSnapshot, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
-/** How many of the snapshot's most used words the chart shows. */
+/** How many of the snapshot's most used words the chart shows. The server sends this many: see `TOP_WORDS`. */
 const shown = 50;
 
 function element(id: string): HTMLElement {
