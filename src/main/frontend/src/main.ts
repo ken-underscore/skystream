@@ -4,7 +4,7 @@ import { connectStream } from './stream';
 import { loadRefreshInterval, refreshIntervals, saveRefreshInterval } from './refresh';
 import { duration, loadSnapshotWindow, parseSnapshot, saveSnapshotWindow, snapshotWindows } from './snapshot';
 
-/** How many of the snapshot's most used words the chart shows. */
+/** How many of the snapshot's most used words the chart shows. The server sends this many: see `TOP_WORDS`. */
 const shown = 50;
 
 function element(id: string): HTMLElement {
@@ -12,15 +12,13 @@ function element(id: string): HTMLElement {
   if (!found) throw new Error(`Missing page element: ${id}`);
   return found;
 }
-const demo = new URLSearchParams(location.search).get('demo') === '1';
+// Demo mode is for the development server only.
+const demo = import.meta.env.DEV && new URLSearchParams(location.search).get('demo') === '1';
 const chart = element('chart') as HTMLOListElement;
 const empty = element('empty');
 const error = element('error');
 const collected = element('collected');
 const status = element('status');
-const mode = element('mode') as HTMLAnchorElement;
-mode.href = demo ? location.pathname : '?demo=1';
-mode.textContent = demo ? 'Live' : 'Demo';
 const update = createChart(chart);
 
 // The window reads as the end of the heading, as in "in the last hour", not "in the last 1 hour".
