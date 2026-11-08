@@ -17,7 +17,7 @@ pnpm install
 pnpm dev
 ```
 
-Open the URL Vite prints. Click **Demo**, or append `?demo=1`, for an immediate sample snapshot without Java. Demo mode aggregates synthetic five-second buckets for the selected duration, with one hour of sample history available immediately (longer windows scale it up), and delivers results at the selected refresh rate. Demo mode never connects to the backend.
+Open the URL Vite prints, and append `?demo=1` for an immediate sample snapshot without Java. Production builds ignore it. Demo mode aggregates synthetic five-second buckets for the selected duration, with one hour of sample history available immediately (longer windows scale it up), and delivers results at the selected refresh rate. Demo mode never connects to the backend.
 
 ```sh
 pnpm check   # Check TypeScript
