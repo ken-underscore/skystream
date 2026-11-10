@@ -4,7 +4,6 @@ import static java.util.Comparator.comparingLong;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.context.annotation.Bean;
@@ -13,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
 import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.service.WordSnapshotService;
 
+import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.server.McpStatelessServerFeatures.AsyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -35,12 +35,21 @@ class TrendingWordsTool {
     AsyncToolSpecification trendingWords(WordSnapshotService snapshots) {
         var tool = Tool.builder()
                 .name("trending_words")
-                .description("The words English Bluesky posts used most in a recent window, most used first, with how "
-                        + "often each was used. Common words are left out. collectedSeconds says how much of the window "
-                        + "Skystream has collected: less than the window after a restart or downtime.")
-                .inputSchema(Map.of("type", "object", "properties", Map.of("windowSeconds", Map.of(
-                        "type", "integer", "enum", WordBucketRepository.SNAPSHOT_WINDOW_SECONDS,
-                        "description", "How far back to count, in seconds. Defaults to 3600, the last hour."))))
+                .description("The " + WordBucketRepository.TOP_WORDS + " words English Bluesky posts used most in a "
+                        + "recent window, most used first, with how often each was used. Common words such as \"the\" "
+                        + "are left out. collectedSeconds says how much of the window Skystream has collected: less than "
+                        + "the window after a restart or downtime.")
+                .inputSchema(McpJsonDefaults.getMapper(), """
+                        {
+                          "type": "object",
+                          "properties": {
+                            "windowSeconds": {
+                              "type": "integer", "enum": %s,
+                              "description": "How far back to count, in seconds. Defaults to %d, the last hour."
+                            }
+                          }
+                        }""".formatted(WordBucketRepository.SNAPSHOT_WINDOW_SECONDS, DEFAULT_WINDOW_SECONDS))
+                .annotations(ToolResults.READ_ONLY)
                 .build();
         // Deferred, so anything thrown becomes a failed call rather than a malformed response.
         return new AsyncToolSpecification(tool, (context, request) -> Mono.defer(() ->
