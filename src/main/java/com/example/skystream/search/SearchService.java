@@ -25,10 +25,19 @@ class SearchService {
         this.registry = registry;
     }
 
-    /** The posts most similar to the query, most similar first. */
+    /** The posts most similar to the query, most similar first, sharpened by hypothetical posts Haiku writes. */
     Flux<PostRepository.Hit> search(String query) {
+        return search(query, expander.expand(query));
+    }
+
+    /** The same, sharpened by example posts the caller wrote, as an agent does through MCP: no call to Haiku. */
+    Flux<PostRepository.Hit> search(String query, List<String> examples) {
+        return search(query, Mono.just(examples));
+    }
+
+    private Flux<PostRepository.Hit> search(String query, Mono<List<String>> hypotheticalPosts) {
         // Embedding blocks on the model, so it runs off the request threads.
-        return Timing.timed(expander.expand(query)
+        return Timing.timed(hypotheticalPosts
                 .flatMap(hypothetical -> Mono.fromCallable(() -> searchVector(query, hypothetical))
                         .subscribeOn(Schedulers.boundedElastic()))
                 .flatMapMany(vector -> posts.nearest(vector, RESULTS)), registry, "skystream.search.query");
