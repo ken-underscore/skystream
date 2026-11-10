@@ -19,6 +19,21 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import reactor.core.publisher.Flux;
 
 class SearchServiceTests {
+    // The query embeds along the first axis, and each example along the second.
+    private final Embedder embedder = new Embedder() {
+        @Override
+        public float[][] embedDocuments(List<String> texts) {
+            return texts.stream().map(text -> Arrays.copyOf(new float[]{0, 1}, 3)).toArray(float[][]::new);
+        }
+
+        @Override
+        public float[] embedQuery(String query) {
+            return Arrays.copyOf(new float[]{1, 0}, 3);
+        }
+    };
+    private final PostRepository posts = mock(PostRepository.class);
+    private final QueryExpander expander = mock(QueryExpander.class);
+
     @Test
     void normalizedMeanPointsBetweenTheVectorsWithLengthOne() {
         float half = (float) Math.sqrt(0.5);
@@ -28,27 +43,23 @@ class SearchServiceTests {
 
     @Test
     void searchesWithTheCallersExamplesWithoutAskingHaiku() {
-        // The query embeds along the first axis, and each example along the second.
-        var embedder = new Embedder() {
-            @Override
-            public float[][] embedDocuments(List<String> texts) {
-                return texts.stream().map(text -> Arrays.copyOf(new float[]{0, 1}, 3)).toArray(float[][]::new);
-            }
+        float x = (float) (1 / Math.sqrt(10));
+        assertArrayEquals(new float[]{x, 3 * x, 0}, searchVector(List.of("one", "two", "three")), 1e-6f);
+        verifyNoInteractions(expander);
+    }
 
-            @Override
-            public float[] embedQuery(String query) {
-                return Arrays.copyOf(new float[]{1, 0}, 3);
-            }
-        };
-        var posts = mock(PostRepository.class);
-        var expander = mock(QueryExpander.class);
+    @Test
+    void searchesWithTheQueryAloneWithoutExamples() {
+        assertArrayEquals(new float[]{1, 0, 0}, searchVector(List.of()), 1e-6f);
+        verifyNoInteractions(expander);
+    }
+
+    /** The vector a search with these examples looks up. */
+    private float[] searchVector(List<String> examples) {
         when(posts.nearest(any(), anyInt())).thenReturn(Flux.empty());
-        new SearchService(embedder, posts, expander, new SimpleMeterRegistry())
-                .search("hikes", List.of("one", "two", "three")).blockLast();
+        new SearchService(embedder, posts, expander, new SimpleMeterRegistry()).search("hikes", examples).blockLast();
         var vector = ArgumentCaptor.forClass(float[].class);
         verify(posts).nearest(vector.capture(), eq(SearchService.RESULTS));
-        float x = (float) (1 / Math.sqrt(10));
-        assertArrayEquals(new float[]{x, 3 * x, 0}, vector.getValue(), 1e-6f);
-        verifyNoInteractions(expander);
+        return vector.getValue();
     }
 }

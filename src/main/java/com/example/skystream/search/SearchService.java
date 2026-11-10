@@ -27,20 +27,21 @@ class SearchService {
 
     /** The posts most similar to the query, most similar first, sharpened by hypothetical posts Haiku writes. */
     Flux<PostRepository.Hit> search(String query) {
-        return search(query, expander.expand(query));
+        return search(query, expander.expand(query), "haiku");
     }
 
     /** The same, sharpened by example posts the caller wrote, as an agent does through MCP: no call to Haiku. */
     Flux<PostRepository.Hit> search(String query, List<String> examples) {
-        return search(query, Mono.just(examples));
+        return search(query, Mono.just(examples), "caller");
     }
 
-    private Flux<PostRepository.Hit> search(String query, Mono<List<String>> hypotheticalPosts) {
+    /** {@code expansion} tags the timer: Haiku takes seconds to write its posts, and a caller's arrive with the query. */
+    private Flux<PostRepository.Hit> search(String query, Mono<List<String>> hypotheticalPosts, String expansion) {
         // Embedding blocks on the model, so it runs off the request threads.
         return Timing.timed(hypotheticalPosts
                 .flatMap(hypothetical -> Mono.fromCallable(() -> searchVector(query, hypothetical))
                         .subscribeOn(Schedulers.boundedElastic()))
-                .flatMapMany(vector -> posts.nearest(vector, RESULTS)), registry, "skystream.search.query");
+                .flatMapMany(vector -> posts.nearest(vector, RESULTS)), registry, "skystream.search.query", "expansion", expansion);
     }
 
     private float[] searchVector(String query, List<String> hypothetical) {

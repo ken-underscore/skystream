@@ -147,7 +147,7 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 | `skystream_expiry_seconds{data}`, `skystream_expiry_deleted_rows_total{data}` | Each expiry run, and the rows it deleted: `search_posts`, or `word_buckets`, counting bucket rows, whose words go with them. |
 | `skystream_search_backlog_posts`, `skystream_search_backlog_age_seconds` | Posts waiting for an embedding, and how long before the reading the oldest was seen. Read at startup and every minute. |
 | `skystream_search_embeddings_total{outcome}` | Posts `embedded`, or `failed` and skipped. Its rate is the embedding speed. |
-| `skystream_search_query_seconds` | Searches, from the query to the results. |
+| `skystream_search_query_seconds{expansion}` | Searches, from the query to the results. `expansion` is `haiku` for the search page, whose query Haiku expands, or `caller` for agents over MCP, which write their own example posts. |
 | `skystream_search_expansion_seconds` | Haiku's query expansions, timed to the end even when the search stopped waiting after 5 seconds. Cached expansions aren't timed. |
 | `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text sent. Cached answers aren't timed. |
 | `skystream_search_haiku_budget_remaining` | Haiku calls left in today's budget. |

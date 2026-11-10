@@ -427,7 +427,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(skystream_search_query_seconds_bucket{host=\"$host\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(skystream_search_query_seconds_bucket{host=\"$host\", expansion=\"haiku\"}[5m])))",
           "legendFormat": "search, to results"
         },
         {
