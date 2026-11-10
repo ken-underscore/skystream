@@ -1,48 +1,66 @@
 package com.example.skystream.mcp;
 
+import static java.util.Comparator.comparingLong;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.example.skystream.repository.WordBucketRepository;
 import com.example.skystream.service.WordSnapshotService;
 
 import io.modelcontextprotocol.server.McpStatelessServerFeatures.AsyncToolSpecification;
+import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import reactor.core.publisher.Mono;
-import tools.jackson.databind.json.JsonMapper;
 
-/** Spike: the most used words in a window, from the snapshots already cached for the website. */
-@Configuration
+/** The trending_words tool: the words used most in a window, read from the snapshots cached for the website. */
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnBooleanProperty(name = "skystream.mcp.enabled", matchIfMissing = true)
 class TrendingWordsTool {
     record WordCount(String word, long count) {}
 
     record Trending(List<WordCount> words, long collectedSeconds) {}
 
-    // Spring AI collects beans that are lists of tools, not single tools.
+    static final int DEFAULT_WINDOW_SECONDS = 3600;
+    /** How long a call waits for the first snapshot after startup before saying there are no words yet. */
+    static final Duration FIRST_SNAPSHOT = Duration.ofSeconds(2);
+
     @Bean
-    List<AsyncToolSpecification> trendingWords(WordSnapshotService snapshots, JsonMapper json) {
+    AsyncToolSpecification trendingWords(WordSnapshotService snapshots) {
         var tool = Tool.builder()
                 .name("trending_words")
-                .description("The words English Bluesky posts used most in a recent window, with counts.")
+                .description("The words English Bluesky posts used most in a recent window, most used first, with how "
+                        + "often each was used. Common words are left out. collectedSeconds says how much of the window "
+                        + "Skystream has collected: less than the window after a restart or downtime.")
                 .inputSchema(Map.of("type", "object", "properties", Map.of("windowSeconds", Map.of(
-                        "type", "integer", "enum", List.of(30, 60, 300, 600, 1800, 3600, 10800, 28800, 86400),
-                        "description", "The window in seconds. Defaults to 3600, the last hour."))))
+                        "type", "integer", "enum", WordBucketRepository.SNAPSHOT_WINDOW_SECONDS,
+                        "description", "How far back to count, in seconds. Defaults to 3600, the last hour."))))
                 .build();
-        return List.of(new AsyncToolSpecification(tool, (context, request) -> {
-            int window = request.arguments().get("windowSeconds") instanceof Number seconds ? seconds.intValue() : 3600;
-            return snapshots.updates(window, Duration.ZERO).next()
-                    .map(snapshot -> new Trending(snapshot.words().entrySet().stream()
-                            .sorted(Map.Entry.<String, Long>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
-                            .map(entry -> new WordCount(entry.getKey(), entry.getValue())).toList(), snapshot.collectedSeconds()))
-                    .timeout(Duration.ofSeconds(2), Mono.just(new Trending(List.of(), 0)))
-                    .map(trending -> CallToolResult.builder()
-                            .structuredContent(trending)
-                            .addTextContent(json.writeValueAsString(trending))
-                            .build());
-        }));
+        // Deferred, so anything thrown becomes a failed call rather than a malformed response.
+        return new AsyncToolSpecification(tool, (context, request) -> Mono.defer(() ->
+                trending(snapshots, windowSeconds(request))));
+    }
+
+    /** The window asked for, if any. Arguments are optional in MCP, and the input schema has checked any window given. */
+    static int windowSeconds(CallToolRequest request) {
+        return request.arguments() != null && request.arguments().get("windowSeconds") instanceof Number seconds
+                ? seconds.intValue() : DEFAULT_WINDOW_SECONDS;
+    }
+
+    static Mono<CallToolResult> trending(WordSnapshotService snapshots, int windowSeconds) {
+        return snapshots.updates(windowSeconds, Duration.ZERO).next()
+                // The cache replays its latest snapshot at once, and has none only just after startup.
+                .timeout(FIRST_SNAPSHOT, Mono.empty())
+                .map(snapshot -> ToolResults.of(new Trending(snapshot.words().entrySet().stream()
+                        .map(entry -> new WordCount(entry.getKey(), entry.getValue()))
+                        .sorted(comparingLong(WordCount::count).reversed().thenComparing(WordCount::word))
+                        .toList(), snapshot.collectedSeconds())))
+                .defaultIfEmpty(ToolResults.error("Skystream has no words yet: it has just started. Try again in a few seconds."));
     }
 }
