@@ -1,4 +1,4 @@
-# The server's web server config, installed by deploy.sh. Caddy serves the frontend and passes /api/, and /mcp for agents,
+# The server's web server config, installed by deploy.sh. Caddy serves the frontend and passes /api/ and /mcp (for agents)
 # to the app, with a certificate it gets and renews itself. It redirects HTTP to HTTPS.
 skystream.kenfritschy.dev {
 	encode

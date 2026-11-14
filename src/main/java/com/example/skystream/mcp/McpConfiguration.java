@@ -32,6 +32,8 @@ import reactor.core.publisher.Mono;
 public class McpConfiguration {
     /** The key of the {@link ServerHttpRequest} a call came in, in each call's context, for telling callers apart. */
     public static final String HTTP_REQUEST = "httpRequest";
+    /** The version the MCP Registry lists, from server.json: change both together. */
+    static final String VERSION = "1.0.0";
 
     @Bean
     WebFluxStatelessServerTransport mcpTransport() {
@@ -51,8 +53,7 @@ public class McpConfiguration {
     McpStatelessAsyncServer mcpServer(WebFluxStatelessServerTransport transport, List<AsyncToolSpecification> tools,
             MeterRegistry registry) {
         return McpServer.async(transport)
-                // The version the MCP Registry lists, from server.json: change both together.
-                .serverInfo("skystream", "1.0.0")
+                .serverInfo("skystream", VERSION)
                 .capabilities(ServerCapabilities.builder().tools(false).build())
                 .tools(tools.stream().map(tool -> timed(tool, registry)).toList())
                 .build();

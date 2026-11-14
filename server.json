@@ -5,7 +5,8 @@
   "description": "Search the last 24 hours of English Bluesky posts by meaning, and see which words are trending.",
   "repository": {
     "url": "https://github.com/ken-underscore/skystream",
-    "source": "github"
+    "source": "github",
+    "id": "1410775540"
   },
   "websiteUrl": "https://skystream.kenfritschy.dev",
   "version": "1.0.0",

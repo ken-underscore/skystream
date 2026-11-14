@@ -92,9 +92,9 @@ Spring Boot initializes `schema.sql` before the repository is used. Repeated sta
 
 While ingestion is enabled (the default), `ExpiryService` deletes what the app no longer shows every 10 minutes: five-second buckets older than 10 minutes, one-minute buckets older than an hour, and five-minute buckets older than 24 hours, with their words, and search posts older than 24 hours. Word buckets are measured from the newest bucket, as the windows are, so catching up after downtime keeps what the windows show; search posts are measured from the clock. Buckets saved before the one-minute or five-minute tables existed aren't copied into them, so after upgrading, the windows they serve fill as the app runs.
 
-## Semantic search (in progress)
+## Semantic search
 
-Semantic search over the last 24 hours of posts is being built behind `skystream.search.enabled`, which is off by default. It embeds text with [embeddinggemma-300m](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) through ONNX Runtime, in-process. Fetch the model (about 1.2 GB) once:
+Semantic search over the last 24 hours of posts is behind `skystream.search.enabled`, which is off by default and on in production. It embeds text with [embeddinggemma-300m](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) through ONNX Runtime, in-process. Fetch the model (about 1.2 GB) once:
 
 ```sh
 scripts/fetch-model.sh
@@ -138,22 +138,33 @@ PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file an
 ## Use Skystream from an agent
 
 Skystream is an [MCP](https://modelcontextprotocol.io) server at `https://skystream.kenfritschy.dev/mcp`, so AI apps such as Claude, ChatGPT, Cursor and VS Code can use it as a tool. It's public and read-only, with no login. It has two tools:
-- **`search_posts`:** searches the last 24 hours of English Bluesky posts by meaning, like the search page. Instead of asking Haiku for hypothetical posts, it takes up to three example posts written by the agent, and it returns the results without an answer, which the agent writes itself. So agents' searches make no Claude calls.
-- **`trending_words`:** the 50 words used most in one of the word cloud's windows, from 30 seconds to 24 hours, read from the same in-memory snapshots.
+- **`search_posts`:** searches the last 24 hours of English Bluesky posts by meaning, like the search page, but the agent writes up to three example posts in place of Haiku's, and writes its own answer from the 10 results, so it makes no Claude calls.
+- **`trending_words`:** the 50 words used most in one of the word cloud's windows, from 30 seconds to 24 hours, the last hour by default, read from the same in-memory snapshots.
 
 To add it:
-- **Claude Code:** `claude mcp add --transport http skystream https://skystream.kenfritschy.dev/mcp`
-- **Claude.ai and Claude Desktop:** Settings → Connectors → Add custom connector, with the URL.
-- **ChatGPT:** in developer mode, add a connector with the URL.
-- **Cursor:** in `~/.cursor/mcp.json`, `{"mcpServers": {"skystream": {"url": "https://skystream.kenfritschy.dev/mcp"}}}`.
-- **VS Code:** in `.vscode/mcp.json`, `{"servers": {"skystream": {"type": "http", "url": "https://skystream.kenfritschy.dev/mcp"}}}`.
+- **Claude Code:** `claude mcp add --transport http --scope user skystream https://skystream.kenfritschy.dev/mcp`, for every project.
+- **Claude.ai and Claude Desktop:** Settings → Connectors → Add custom connector, with the URL. On Team and Enterprise plans, an owner adds it for the organization.
+- **ChatGPT** (paid plans): turn on developer mode (Settings → Apps → Advanced settings), then create an app with the URL and no authentication.
+- **Cursor**, for every project, in `~/.cursor/mcp.json`:
 
-The server speaks MCP's Streamable HTTP transport, statelessly: each call stands alone, with no session. Agents' searches have limits of their own, apart from the search page's:
-- **Per address:** 30 a minute (`skystream.mcp.searches-per-minute`). Hosted apps such as Claude.ai call from shared addresses, so it's higher than the page's.
+  ```json
+  {"mcpServers": {"skystream": {"url": "https://skystream.kenfritschy.dev/mcp"}}}
+  ```
+
+- **VS Code**, for one workspace, in `.vscode/mcp.json`:
+
+  ```json
+  {"servers": {"skystream": {"type": "http", "url": "https://skystream.kenfritschy.dev/mcp"}}}
+  ```
+
+A local app serves it at `http://localhost:8080/mcp`. The server speaks MCP's Streamable HTTP transport, statelessly: each call stands alone, with no session.
+
+Agents' searches have limits of their own, apart from the search page's. They make no Claude calls, so there's no daily limit to protect a budget:
+- **Per address:** 30 a minute (`skystream.mcp.searches-per-minute`), counting clients as the search page does. Hosted apps such as Claude.ai call from shared addresses, hence more than the page's 10.
 - **Overall:** 300 a minute from all addresses together (`skystream.mcp.searches-per-minute-overall`).
-- **At once:** 4 searches embedding (`skystream.mcp.concurrent-searches`), which leaves the CPU for the page's searches and for embedding new posts. A search that finds 4 embedding is refused as busy, and still counts toward the other limits.
+- **Embedding at once:** 4 searches (`skystream.mcp.concurrent-searches`), which leaves the CPU for the page's searches and for embedding new posts. A search that finds 4 embedding is refused as busy, and still counts toward the other limits.
 
-A refused call returns a tool error saying when to try again, which the agent reads. `trending_words` isn't limited, as it only reads memory. Clients are counted as for the search page. Set `skystream.mcp.enabled=false` to turn MCP off; `search_posts` also needs search enabled.
+A refused call returns a tool error saying when to try again, which the agent reads. `trending_words` isn't limited, as it only reads memory. Set `skystream.mcp.enabled=false` to turn MCP off; `search_posts` also needs search enabled.
 
 ## Metrics
 
@@ -298,6 +309,8 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost. Only one deploy runs at a time.
 
 **Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the first whose `deploy.sh` re-runs itself after checking out (`--checked-out`). Older ones can't deploy, and can't run in production. Going back past `bd033dc` also removes the search rate limits and daily budget, which a public site needs.
+
+**Publishing to the MCP Registry:** `server.json` describes the server for the [MCP Registry](https://registry.modelcontextprotocol.io), as `io.github.ken-underscore/skystream`. The registry takes each version once, so after changing it, raise the version in `server.json` and in `McpConfiguration` (a test keeps them equal), deploy, then publish from the checkout with [`mcp-publisher`](https://github.com/modelcontextprotocol/registry/releases): `mcp-publisher login github`, then `mcp-publisher publish`.
 
 **Logs:** `journalctl -u skystream -f`. A JVM crash leaves `hs_err_pid*.log` in `/var/lib/skystream`.
 
