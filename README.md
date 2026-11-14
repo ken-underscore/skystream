@@ -135,6 +135,26 @@ Both are kept in memory, so a restart resets them. Set a spending limit in the A
 
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
 
+## Use Skystream from an agent
+
+Skystream is an [MCP](https://modelcontextprotocol.io) server at `https://skystream.kenfritschy.dev/mcp`, so AI apps such as Claude, ChatGPT, Cursor and VS Code can use it as a tool. It's public and read-only, with no login. It has two tools:
+- **`search_posts`:** searches the last 24 hours of English Bluesky posts by meaning, like the search page. Instead of asking Haiku for hypothetical posts, it takes up to three example posts written by the agent, and it returns the results without an answer, which the agent writes itself. So agents' searches make no Claude calls.
+- **`trending_words`:** the 50 words used most in one of the word cloud's windows, from 30 seconds to 24 hours, read from the same in-memory snapshots.
+
+To add it:
+- **Claude Code:** `claude mcp add --transport http skystream https://skystream.kenfritschy.dev/mcp`
+- **Claude.ai and Claude Desktop:** Settings → Connectors → Add custom connector, with the URL.
+- **ChatGPT:** in developer mode, add a connector with the URL.
+- **Cursor:** in `~/.cursor/mcp.json`, `{"mcpServers": {"skystream": {"url": "https://skystream.kenfritschy.dev/mcp"}}}`.
+- **VS Code:** in `.vscode/mcp.json`, `{"servers": {"skystream": {"type": "http", "url": "https://skystream.kenfritschy.dev/mcp"}}}`.
+
+The server speaks MCP's Streamable HTTP transport, statelessly: each call stands alone, with no session. Agents' searches have limits of their own, apart from the search page's:
+- **Per address:** 30 a minute (`skystream.mcp.searches-per-minute`). Hosted apps such as Claude.ai call from shared addresses, so it's higher than the page's.
+- **Overall:** 300 a minute from all addresses together (`skystream.mcp.searches-per-minute-overall`).
+- **At once:** 4 searches embedding (`skystream.mcp.concurrent-searches`), which leaves the CPU for the page's searches and for embedding new posts. A search that finds 4 embedding is refused as busy, and still counts toward the other limits.
+
+A refused call returns a tool error saying when to try again, which the agent reads. `trending_words` isn't limited, as it only reads memory. Clients are counted as for the search page. Set `skystream.mcp.enabled=false` to turn MCP off; `search_posts` also needs search enabled.
+
 ## Metrics
 
 The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`. Actuator runs on its own port, which listens only on the local machine, and exposes nothing but `health` and `prometheus`. Spring Boot's built-in metrics cover the JVM, CPU, HTTP requests (`http_server_requests_seconds`, which for `/api/search/stream` times the whole stream, answer included) and the database connection pool (`r2dbc_pool_*`). The app adds:
@@ -220,7 +240,7 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 - **The app:** `deploy/skystream.service` runs it as the `skystream` user with the `production` profile (`src/main/resources/application-production.properties`). It listens only on 127.0.0.1, and restarts after a crash.
 - **Postgres:** `deploy/compose.production.yaml` gives it a fixed local port, a health check and a restart policy, so it comes back after a reboot.
 - **The frontend:** built into `/opt/skystream/www`.
-- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile in your own fork: `deploy.sh` checks out commits, so a local edit on the server won't last.
+- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` and `/mcp` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile in your own fork: `deploy.sh` checks out commits, so a local edit on the server won't last.
 - **The firewall:** `ufw` allows only SSH, HTTP and HTTPS. Docker bypasses `ufw` for ports it publishes, which is why Compose binds Postgres to 127.0.0.1.
 - **Ownership:** the checkout (`/opt/skystream/app`), the model, `.env`, the installed jar (`/opt/skystream/skystream.jar`) and the frontend all belong to root. The app writes only to `/var/lib/skystream`, so it can't change the code that runs, or the deploy script root runs.
 
