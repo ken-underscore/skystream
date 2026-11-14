@@ -151,8 +151,10 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 | `skystream_search_expansion_seconds` | Haiku's query expansions, timed to the end even when the search stopped waiting after 5 seconds. Cached expansions aren't timed. |
 | `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text sent. Cached answers aren't timed. |
 | `skystream_search_haiku_budget_remaining` | Haiku calls left in today's budget. |
+| `skystream_mcp_call_seconds{tool}` | Agents' tool calls over MCP, from the call to the result. `outcome` is `error` when the tool returned an error, a limited call included. Calls with invalid arguments are refused before reaching the tool, and aren't timed. |
+| `skystream_mcp_limited_total{tool,reason}` | Agent searches refused: `rate` past the per-address or overall limit, `busy` while too many were embedding. |
 
-Timers have an `outcome` tag: `success`, `error` or `cancel`. The search timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 170 series, built-in ones included.
+Timers have an `outcome` tag: `success`, `error` or `cancel`. The search and MCP timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 220 series, built-in ones included.
 
 ### Sending metrics to Grafana Cloud
 
@@ -162,7 +164,7 @@ The Compose file's `monitoring` profile runs [Grafana Alloy](https://grafana.com
 - the host: CPU, memory, disk and network,
 - PostgreSQL, through `postgres-exporter`: table and index sizes, dead rows and autovacuum runs.
 
-The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 170 from the app, 480 from PostgreSQL, 55 from the processes, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Docker Engine with the Compose plugin on Linux (WSL included), not Docker Desktop. Its status page is at `http://127.0.0.1:12345`, on that machine only.
+The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 220 from the app, 480 from PostgreSQL, 55 from the processes, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Docker Engine with the Compose plugin on Linux (WSL included), not Docker Desktop. Its status page is at `http://127.0.0.1:12345`, on that machine only.
 
 1. Create a free Grafana Cloud stack. On its Prometheus details page, find the remote write URL and the username, and create an access policy token with the `metrics:write` scope. Add them to `.env`, and on a server make it readable only by you (`chmod 600 .env`):
 

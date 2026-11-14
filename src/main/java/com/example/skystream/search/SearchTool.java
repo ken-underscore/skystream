@@ -1,17 +1,26 @@
 package com.example.skystream.search;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 
+import com.example.skystream.mcp.McpConfiguration;
 import com.example.skystream.mcp.ToolResults;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.json.McpJsonDefaults;
 import io.modelcontextprotocol.server.McpStatelessServerFeatures.AsyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -29,6 +38,7 @@ import reactor.core.publisher.Mono;
 class SearchTool {
     static final int MAX_EXAMPLES = 3;
     static final int MAX_EXAMPLE_LENGTH = 300;
+    static final String BUSY = "Skystream is busy with other searches. Try again in a few seconds.";
     private static final Logger log = LoggerFactory.getLogger(SearchTool.class);
 
     record Results(List<SearchController.Result> posts) {}
@@ -61,25 +71,67 @@ class SearchTool {
             .annotations(ToolResults.READ_ONLY)
             .build();
 
+    /**
+     * Agents have limits of their own, apart from the search page's, so a busy connector can't use up the page's.
+     * Hosted connectors such as Claude.ai's call from shared addresses, hence the larger per-address limit, and the
+     * overall one. Each search embeds up to four texts, so at most {@code concurrent} embed at once, leaving the CPU
+     * for the page's searches and for embedding new posts. A search refused as busy has counted toward the rate limits.
+     */
     @Bean
-    AsyncToolSpecification searchPosts(SearchService search) {
-        // Deferred, so anything thrown becomes a failed call rather than a malformed response.
-        return new AsyncToolSpecification(TOOL, (context, request) -> Mono.defer(() -> search(search, request.arguments())));
+    AsyncToolSpecification searchPosts(SearchService search, MeterRegistry registry,
+            @Value("${skystream.mcp.searches-per-minute:30}") int perMinute,
+            @Value("${skystream.mcp.searches-per-minute-overall:300}") int overallPerMinute,
+            @Value("${skystream.mcp.concurrent-searches:4}") int concurrent) {
+        var limiter = new RateLimiter(Clock.systemUTC(), List.of(
+                new RateLimiter.Limit(perMinute, Duration.ofMinutes(1)),
+                RateLimiter.Limit.overall(overallPerMinute, Duration.ofMinutes(1))));
+        return tool(search, limiter, new Semaphore(concurrent), registry);
+    }
+
+    static AsyncToolSpecification tool(SearchService search, RateLimiter limiter, Semaphore embeddings,
+            MeterRegistry registry) {
+        // Registered up front, so each starts at 0 and the first refusal after a restart shows as an increase.
+        Counter rateLimited = registry.counter("skystream.mcp.limited", "tool", TOOL.name(), "reason", "rate");
+        Counter busy = registry.counter("skystream.mcp.limited", "tool", TOOL.name(), "reason", "busy");
+        return new AsyncToolSpecification(TOOL, (context, request) -> Mono.defer(() -> {
+            var wait = limiter.tryAcquire(client(context));
+            if (wait.isPresent()) {
+                rateLimited.increment();
+                return Mono.just(ToolResults.error(retryIn(wait.get())));
+            }
+            // Deferred, so anything thrown becomes a failed call rather than a malformed response.
+            return Mono.defer(() -> search(search, request.arguments(), embeddings)).onErrorResume(error -> {
+                if (error instanceof SearchService.BusyException) {
+                    busy.increment();
+                    return Mono.just(ToolResults.error(BUSY));
+                }
+                log.warn("Could not search for an agent", error);
+                return Mono.just(ToolResults.error("The search failed. Try again shortly."));
+            });
+        }));
+    }
+
+    /** Who called, counted as the search page counts its clients. */
+    private static String client(McpTransportContext context) {
+        return Clients.of((ServerHttpRequest) context.get(McpConfiguration.HTTP_REQUEST));
+    }
+
+    static String retryIn(Duration wait) {
+        long seconds = Math.ceilDiv(wait.toMillis(), 1000);
+        return "Skystream's search limit is reached. Try again in %d %s."
+                .formatted(seconds, seconds == 1 ? "second" : "seconds");
     }
 
     /** The input schema has already checked the arguments' presence, types and lengths. */
-    static Mono<CallToolResult> search(SearchService search, Map<String, Object> arguments) {
+    private static Mono<CallToolResult> search(SearchService search, Map<String, Object> arguments,
+            Semaphore embeddings) {
         String query = ((String) arguments.get("query")).strip();
         if (query.isEmpty()) return Mono.just(ToolResults.error("Give a query with some words in it."));
         // Blank examples, which models sometimes send as placeholders, are left out.
         List<String> examples = arguments.get("examples") instanceof List<?> list
                 ? list.stream().map(example -> ((String) example).strip()).filter(example -> !example.isEmpty()).toList()
                 : List.of();
-        return search.search(query, examples).map(SearchController.Result::of).collectList()
-                .map(posts -> ToolResults.of(new Results(posts)))
-                .onErrorResume(error -> {
-                    log.warn("Could not search for an agent", error);
-                    return Mono.just(ToolResults.error("The search failed. Try again shortly."));
-                });
+        return search.search(query, examples, embeddings).map(SearchController.Result::of).collectList()
+                .map(posts -> ToolResults.of(new Results(posts)));
     }
 }

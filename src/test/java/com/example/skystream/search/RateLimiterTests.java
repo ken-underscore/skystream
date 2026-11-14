@@ -39,4 +39,14 @@ class RateLimiterTests {
         assertEquals(Optional.empty(), limiter.tryAcquire("a"));
         assertEquals(Optional.of(Duration.ofDays(1).minusMinutes(1)), limiter.tryAcquire("a"));
     }
+
+    @Test
+    void anOverallLimitCountsEveryClientTogether() {
+        var shared = new RateLimiter(clock, List.of(new RateLimiter.Limit(2, Duration.ofMinutes(1)),
+                RateLimiter.Limit.overall(3, Duration.ofMinutes(1))));
+        assertEquals(Optional.empty(), shared.tryAcquire("a"));
+        assertEquals(Optional.empty(), shared.tryAcquire("a"));
+        assertEquals(Optional.empty(), shared.tryAcquire("b"));
+        assertEquals(Optional.of(Duration.ofMinutes(1)), shared.tryAcquire("c"));
+    }
 }

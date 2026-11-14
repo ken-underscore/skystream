@@ -8,6 +8,8 @@ import java.util.Map;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.modelcontextprotocol.server.McpStatelessServerFeatures.AsyncToolSpecification;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -16,9 +18,14 @@ public final class McpTestClient {
     private final WebTestClient client;
 
     public McpTestClient(AsyncToolSpecification... tools) {
+        this(new SimpleMeterRegistry(), tools);
+    }
+
+    /** Records the calls' metrics in {@code registry}. */
+    public McpTestClient(MeterRegistry registry, AsyncToolSpecification... tools) {
         var configuration = new McpConfiguration();
         var transport = configuration.mcpTransport();
-        configuration.mcpServer(transport, List.of(tools));
+        configuration.mcpServer(transport, List.of(tools), registry);
         client = WebTestClient.bindToRouterFunction(transport.getRouterFunction()).build();
     }
 

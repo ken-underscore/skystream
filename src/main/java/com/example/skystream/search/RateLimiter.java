@@ -11,12 +11,20 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
- * Limits how often each client searches, so one script can't spend the day's budget. Each limit counts in a fixed window
- * that starts at the client's first search in it. Windows are kept in memory, so a restart resets them.
+ * Limits how often clients search, so one script can't spend the day's budget. Each limit counts in a fixed window that
+ * starts at the first search in it. Windows are kept in memory, so a restart resets them.
  */
 class RateLimiter {
-    /** At most {@code searches} in each {@code window}. */
-    record Limit(int searches, Duration window) {}
+    /** At most {@code searches} in each {@code window}: by each client, or if {@code overall}, by all together. */
+    record Limit(int searches, Duration window, boolean overall) {
+        Limit(int searches, Duration window) {
+            this(searches, window, false);
+        }
+
+        static Limit overall(int searches, Duration window) {
+            return new Limit(searches, window, true);
+        }
+    }
 
     private static final class Window {
         final Instant end;
@@ -48,7 +56,8 @@ class RateLimiter {
         var current = new ArrayList<Window>(counters.size());
         Duration wait = null;
         for (var counter : counters) {
-            Window window = counter.windows().asMap().compute(client, (key, existing) -> existing == null
+            String key = counter.limit().overall() ? "" : client;
+            Window window = counter.windows().asMap().compute(key, (unused, existing) -> existing == null
                     || !now.isBefore(existing.end) ? new Window(now.plus(counter.limit().window())) : existing);
             if (window.used >= counter.limit().searches()) {
                 Duration untilReset = Duration.between(now, window.end);

@@ -1,6 +1,7 @@
 package com.example.skystream;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
@@ -10,17 +11,27 @@ import reactor.core.publisher.Mono;
 
 /**
  * Times each subscription, so each retry is timed on its own, and tags it with how it ended: {@code outcome} is
- * {@code success}, {@code error} or {@code cancel}. The time is recorded before the ending is passed on. For a Mono that
- * excludes what subscribers do with its value; a Flux's time includes the subscribers' handling of each element.
+ * {@code success}, {@code error} or {@code cancel}, or one a Mono's value gives. The time is recorded before the ending
+ * is passed on. For a Mono that excludes what subscribers do with its value; a Flux's time includes the subscribers'
+ * handling of each element.
  */
 public final class Timing {
     private Timing() {}
 
     public static <T> Mono<T> timed(Mono<T> mono, MeterRegistry registry, String name, String... tags) {
+        return timed(mono, value -> "success", registry, name, tags);
+    }
+
+    /**
+     * As above, for a Mono whose value says how it went: a value's {@code outcome} tag is {@code outcome.apply(value)},
+     * and no value is a success.
+     */
+    public static <T> Mono<T> timed(Mono<T> mono, Function<? super T, String> outcome, MeterRegistry registry,
+            String name, String... tags) {
         var allTags = Tags.of(tags);
         return Mono.defer(() -> {
             var timing = new Run(registry, name, allTags);
-            return mono.doOnSuccess(value -> timing.end("success"))
+            return mono.doOnSuccess(value -> timing.end(value == null ? "success" : outcome.apply(value)))
                     .doOnError(error -> timing.end("error"))
                     .doOnCancel(() -> timing.end("cancel"));
         });
