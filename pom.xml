@@ -97,6 +97,20 @@
 			<version>2.73.0</version>
 		</dependency>
 
+		<!-- The MCP Java SDK and its WebFlux transport, wired in McpConfiguration. Spring AI's starter isn't used: it would
+		     bring victools 5, while the Anthropic SDK's structured outputs need victools 4. -->
+		<dependency>
+			<groupId>io.modelcontextprotocol.sdk</groupId>
+			<artifactId>mcp</artifactId>
+			<version>2.1.0</version>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>mcp-spring-webflux</artifactId>
+			<!-- Built against mcp 2.1.0. -->
+			<version>2.0.2</version>
+		</dependency>
+
 		<dependency>
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>

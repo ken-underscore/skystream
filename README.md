@@ -92,9 +92,9 @@ Spring Boot initializes `schema.sql` before the repository is used. Repeated sta
 
 While ingestion is enabled (the default), `ExpiryService` deletes what the app no longer shows every 10 minutes: five-second buckets older than 10 minutes, one-minute buckets older than an hour, and five-minute buckets older than 24 hours, with their words, and search posts older than 24 hours. Word buckets are measured from the newest bucket, as the windows are, so catching up after downtime keeps what the windows show; search posts are measured from the clock. Buckets saved before the one-minute or five-minute tables existed aren't copied into them, so after upgrading, the windows they serve fill as the app runs.
 
-## Semantic search (in progress)
+## Semantic search
 
-Semantic search over the last 24 hours of posts is being built behind `skystream.search.enabled`, which is off by default. It embeds text with [embeddinggemma-300m](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) through ONNX Runtime, in-process. Fetch the model (about 1.2 GB) once:
+Semantic search over the last 24 hours of posts is behind `skystream.search.enabled`, which is off by default and on in production. It embeds text with [embeddinggemma-300m](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) through ONNX Runtime, in-process. Fetch the model (about 1.2 GB) once:
 
 ```sh
 scripts/fetch-model.sh
@@ -135,6 +135,37 @@ Both are kept in memory, so a restart resets them. Set a spending limit in the A
 
 PostgreSQL runs on the `pgvector/pgvector:pg17` image, which the Compose file and tests use. Switching an existing Compose volume from the earlier `postgres:17-alpine` image can cause collation-version warnings, so recreate the tables with the `clean-start` profile after switching.
 
+## Use Skystream from an agent
+
+Skystream is an [MCP](https://modelcontextprotocol.io) server at `https://skystream.kenfritschy.dev/mcp`, so AI apps such as Claude, ChatGPT, Cursor and VS Code can use it as a tool. It's public and read-only, with no login. It has two tools:
+- **`search_posts`:** searches the last 24 hours of English Bluesky posts by meaning, like the search page, but the agent writes up to three example posts in place of Haiku's, and writes its own answer from the 10 results, so it makes no Claude calls.
+- **`trending_words`:** the 50 words used most in one of the word cloud's windows, from 30 seconds to 24 hours, the last hour by default, read from the same in-memory snapshots.
+
+To add it:
+- **Claude Code:** `claude mcp add --transport http --scope user skystream https://skystream.kenfritschy.dev/mcp`, for every project.
+- **Claude.ai and Claude Desktop:** Settings → Connectors → Add custom connector, with the URL. On Team and Enterprise plans, an owner adds it for the organization.
+- **ChatGPT** (paid plans): turn on developer mode (Settings → Apps → Advanced settings), then create an app with the URL and no authentication.
+- **Cursor**, for every project, in `~/.cursor/mcp.json`:
+
+  ```json
+  {"mcpServers": {"skystream": {"url": "https://skystream.kenfritschy.dev/mcp"}}}
+  ```
+
+- **VS Code**, for one workspace, in `.vscode/mcp.json`:
+
+  ```json
+  {"servers": {"skystream": {"type": "http", "url": "https://skystream.kenfritschy.dev/mcp"}}}
+  ```
+
+A local app serves it at `http://localhost:8080/mcp`. The server speaks MCP's Streamable HTTP transport, statelessly: each call stands alone, with no session.
+
+Agents' searches have limits of their own, apart from the search page's. They make no Claude calls, so there's no daily limit to protect a budget:
+- **Per address:** 30 a minute (`skystream.mcp.searches-per-minute`), counting clients as the search page does. Hosted apps such as Claude.ai call from shared addresses, hence more than the page's 10.
+- **Overall:** 300 a minute from all addresses together (`skystream.mcp.searches-per-minute-overall`).
+- **Embedding at once:** 4 searches (`skystream.mcp.concurrent-searches`), which leaves the CPU for the page's searches and for embedding new posts. A search that finds 4 embedding is refused as busy, and still counts toward the other limits.
+
+A refused call returns a tool error saying when to try again, which the agent reads. `trending_words` isn't limited, as it only reads memory. Set `skystream.mcp.enabled=false` to turn MCP off; `search_posts` also needs search enabled.
+
 ## Metrics
 
 The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`. Actuator runs on its own port, which listens only on the local machine, and exposes nothing but `health` and `prometheus`. Spring Boot's built-in metrics cover the JVM, CPU, HTTP requests (`http_server_requests_seconds`, which for `/api/search/stream` times the whole stream, answer included) and the database connection pool (`r2dbc_pool_*`). The app adds:
@@ -147,12 +178,14 @@ The app serves Prometheus metrics at `http://127.0.0.1:8081/actuator/prometheus`
 | `skystream_expiry_seconds{data}`, `skystream_expiry_deleted_rows_total{data}` | Each expiry run, and the rows it deleted: `search_posts`, or `word_buckets`, counting bucket rows, whose words go with them. |
 | `skystream_search_backlog_posts`, `skystream_search_backlog_age_seconds` | Posts waiting for an embedding, and how long before the reading the oldest was seen. Read at startup and every minute. |
 | `skystream_search_embeddings_total{outcome}` | Posts `embedded`, or `failed` and skipped. Its rate is the embedding speed. |
-| `skystream_search_query_seconds` | Searches, from the query to the results. |
+| `skystream_search_query_seconds{expansion}` | Searches, from the query to the results. `expansion` is `haiku` for the search page, whose query Haiku expands, or `caller` for agents over MCP, which write their own example posts. |
 | `skystream_search_expansion_seconds` | Haiku's query expansions, timed to the end even when the search stopped waiting after 5 seconds. Cached expansions aren't timed. |
 | `skystream_search_answer_seconds` | Haiku's answers, from the call to the last text sent. Cached answers aren't timed. |
 | `skystream_search_haiku_budget_remaining` | Haiku calls left in today's budget. |
+| `skystream_mcp_call_seconds{tool}` | Agents' tool calls over MCP, from the call to the result. `outcome` is `error` when the tool returned an error, a limited call included. Calls with invalid arguments are refused before reaching the tool, and aren't timed. |
+| `skystream_mcp_limited_total{tool,reason}` | Agent searches refused: `rate` past the per-address or overall limit, `busy` while too many were embedding. |
 
-Timers have an `outcome` tag: `success`, `error` or `cancel`. The search timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 170 series, built-in ones included.
+Timers have an `outcome` tag: `success`, `error` or `cancel`. The search and MCP timers also have buckets at 0.25 to 20 seconds (`_bucket`), so percentiles can be graphed. Tags take only values from a fixed set, never search text or post URIs, so the app produces about 220 series, built-in ones included.
 
 ### Sending metrics to Grafana Cloud
 
@@ -162,7 +195,7 @@ The Compose file's `monitoring` profile runs [Grafana Alloy](https://grafana.com
 - the host: CPU, memory, disk and network,
 - PostgreSQL, through `postgres-exporter`: table and index sizes, dead rows and autovacuum runs.
 
-The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 170 from the app, 480 from PostgreSQL, 55 from the processes, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Docker Engine with the Compose plugin on Linux (WSL included), not Docker Desktop. Its status page is at `http://127.0.0.1:12345`, on that machine only.
+The free tier allows 10,000 active series and keeps 14 days. This setup sends about 1,000–2,000: about 220 from the app, 480 from PostgreSQL, 55 from the processes, and the rest from the host, which grows with its CPUs and disks. Alloy uses the host's network to reach the app's local-only port, so it needs Docker Engine with the Compose plugin on Linux (WSL included), not Docker Desktop. Its status page is at `http://127.0.0.1:12345`, on that machine only.
 
 1. Create a free Grafana Cloud stack. On its Prometheus details page, find the remote write URL and the username, and create an access policy token with the `metrics:write` scope. Add them to `.env`, and on a server make it readable only by you (`chmod 600 .env`):
 
@@ -218,7 +251,7 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 - **The app:** `deploy/skystream.service` runs it as the `skystream` user with the `production` profile (`src/main/resources/application-production.properties`). It listens only on 127.0.0.1, and restarts after a crash.
 - **Postgres:** `deploy/compose.production.yaml` gives it a fixed local port, a health check and a restart policy, so it comes back after a reboot.
 - **The frontend:** built into `/opt/skystream/www`.
-- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile in your own fork: `deploy.sh` checks out commits, so a local edit on the server won't last.
+- **The web server:** Caddy, configured by `deploy/Caddyfile`, serves the frontend on `skystream.kenfritschy.dev` and passes `/api/` and `/mcp` to the app. It gets and renews the HTTPS certificate itself, and redirects HTTP to HTTPS. It runs on the server itself rather than in Docker, so the app sees each visitor's address for the rate limits. For another domain, change the site address in the Caddyfile in your own fork: `deploy.sh` checks out commits, so a local edit on the server won't last.
 - **The firewall:** `ufw` allows only SSH, HTTP and HTTPS. Docker bypasses `ufw` for ports it publishes, which is why Compose binds Postgres to 127.0.0.1.
 - **Ownership:** the checkout (`/opt/skystream/app`), the model, `.env`, the installed jar (`/opt/skystream/skystream.jar`) and the frontend all belong to root. The app writes only to `/var/lib/skystream`, so it can't change the code that runs, or the deploy script root runs.
 
@@ -276,6 +309,8 @@ On the server, the app runs as a packaged jar under systemd, and Postgres runs i
 The app is down for the few seconds it takes to start. Ingestion resumes from its checkpoint, so no words are lost. Only one deploy runs at a time.
 
 **Rolling back:** run `deploy/deploy.sh <commit>`, with the commit to go back to. The earliest it can go back to is the first whose `deploy.sh` re-runs itself after checking out (`--checked-out`). Older ones can't deploy, and can't run in production. Going back past `bd033dc` also removes the search rate limits and daily budget, which a public site needs.
+
+**Publishing to the MCP Registry:** `server.json` describes the server for the [MCP Registry](https://registry.modelcontextprotocol.io), as `io.github.ken-underscore/skystream`. The registry takes each version once, so after changing it, raise the version in `server.json` and in `McpConfiguration` (a test keeps them equal), deploy, then publish from the checkout with [`mcp-publisher`](https://github.com/modelcontextprotocol/registry/releases): `mcp-publisher login github`, then `mcp-publisher publish`.
 
 **Logs:** `journalctl -u skystream -f`. A JVM crash leaves `hs_err_pid*.log` in `/var/lib/skystream`.
 
